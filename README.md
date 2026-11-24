@@ -9,6 +9,12 @@ screen.
 > **Beta (v0.1.x).** Built and tested on a Pixel 8 (Android 17). Other phones work but the layout is
 > tuned for 20:9 screens.
 
+<p align="center">
+  <img src="docs/img/home.jpg" width="300" alt="Home: weather widget, player, clock and app list">
+  &nbsp;
+  <img src="docs/img/slideshow.jpg" width="300" alt="Full-screen slideshow with clock, weather and now playing">
+</p>
+
 ## Layout
 
 ```
