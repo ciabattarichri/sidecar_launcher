@@ -1,0 +1,25 @@
+# Gradle / Android build output
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+*.apk
+*.aab
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDEs / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# FreeCAD backups
+*.FCBak
+
+# Python
+__pycache__/
+*.pyc
+release/v*/
