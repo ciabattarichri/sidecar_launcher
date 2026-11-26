@@ -63,6 +63,28 @@ data class LauncherConfig(
     val paletteSeed: Int = 0xFF3F6FD8.toInt(),
     /** Last first-run setup answered ([SETUP_VERSION]): below it the setup questions are shown again. */
     val setupVersion: Int = 0,
+    /** App list: icons next to the names (off = names only; can't be off together with [showLabels]). */
+    val showIcons: Boolean = true,
+    /** App names text size: "small" | "normal" | "large" | "xl". */
+    val labelSize: String = "normal",
+    /** Search apps: open the app straight away when only one is left. */
+    val autoOpenSingle: Boolean = false,
+    /** Custom app names, by app key. */
+    val renamed: Map<String, String> = emptyMap(),
+    /** Long press on an app: "info" (app info) or "menu" (rename, uninstall, info…). */
+    val appLongPress: String = "info",
+    /** Bottom-left search pill: shown, and which app it opens ("" = Google, else a browser package). */
+    val searchBar: Boolean = true,
+    val searchApp: String = "",
+    /** Camera button next to the search pill. */
+    val cameraButton: Boolean = true,
+    /** Agenda widget: "list" (next 7 days) or "month" (calendar grid, swipe between months). */
+    val agendaView: String = "list",
+    /** Smart home widget: "google" (Google Home) or "ha" (Home Assistant). */
+    val homeProvider: String = "google",
+    val haUrl: String = "",
+    val haToken: String = "",
+    // Home Assistant entities hidden from the widget live in hiddenDevices too (entity ids).
     /** phonedash pull server (set by `phonedash pair-launcher`). */
     val pcHost: String = "",
     val pcPort: Int = 8766,
@@ -99,6 +121,7 @@ object Settings {
     private val DEMO_KEYS = setOf(
         "tabs", "palette", "paletteSeed", "background", "cardOpacity", "pillOpacity", "statusBar", "statusNotifs",
         "statusStyle", "statusPill", "showLabels", "clockPages", "iconSize", "themedIcons", "leftHanded", "topClockAlign", "appListWidth", "navBar",
+        "showIcons", "labelSize", "searchBar", "cameraButton", "agendaView", "appLongPress", "setupVersion",
     )
 
     fun demo(overrides: JSONObject) {
@@ -114,7 +137,9 @@ object Settings {
         beforeDemo = null
     }
 
-    fun togglePin(key: String) = update { c -> c.copy(pinned = if (key in c.pinned) c.pinned - key else c.pinned + key) }
+    /** Pinning a hidden app (found through search) also un-hides it, or it would never show up. */
+    fun togglePin(key: String) = update { c -> if (key in c.pinned) c.copy(pinned = c.pinned - key) else c.copy(pinned = c.pinned + key, hidden = c.hidden - key) }
+    fun rename(key: String, name: String?) = update { c -> c.copy(renamed = if (name.isNullOrBlank()) c.renamed - key else c.renamed + (key to name.trim())) }
     fun toggleHidden(key: String) = update { c -> c.copy(hidden = if (key in c.hidden) c.hidden - key else c.hidden + key, pinned = c.pinned - key) }
     fun toggleDevice(id: String) = update { c -> c.copy(hiddenDevices = if (id in c.hiddenDevices) c.hiddenDevices - id else c.hiddenDevices + id) }
     fun toggleCalendar(id: Long) = update { c -> c.copy(hiddenCalendars = if (id in c.hiddenCalendars) c.hiddenCalendars - id else c.hiddenCalendars + id) }
@@ -134,6 +159,10 @@ object Settings {
         .put("city", c.city).put("billableUrl", c.billableUrl).put("billableToken", c.billableToken)
         .put("photoAlbum", c.photoAlbum).put("slideshowSeconds", c.slideshowSeconds)
         .put("photoSource", c.photoSource).put("iconSize", c.iconSize).put("showLabels", c.showLabels).put("themedIcons", c.themedIcons)
+        .put("showIcons", c.showIcons).put("labelSize", c.labelSize).put("autoOpenSingle", c.autoOpenSingle)
+        .put("renamed", JSONObject(c.renamed as Map<*, *>)).put("appLongPress", c.appLongPress)
+        .put("searchBar", c.searchBar).put("searchApp", c.searchApp).put("cameraButton", c.cameraButton)
+        .put("agendaView", c.agendaView).put("homeProvider", c.homeProvider).put("haUrl", c.haUrl).put("haToken", c.haToken)
         .put("configVersion", 2).put("navBar", c.navBar).put("statusBar", c.statusBar).put("background", c.background).put("cardOpacity", c.cardOpacity).put("topClockAlign", c.topClockAlign).put("appListWidth", c.appListWidth).put("pillOpacity", c.pillOpacity).put("statusNotifs", c.statusNotifs).put("statusStyle", c.statusStyle).put("statusPill", c.statusPill).put("paletteSeed", c.paletteSeed).put("setupVersion", c.setupVersion).put("pcHost", c.pcHost).put("pcPort", c.pcPort).put("pcToken", c.pcToken)
 
     private fun decode(j: JSONObject): LauncherConfig {
@@ -148,7 +177,8 @@ object Settings {
             configVersion = j.optInt("configVersion", 1),
             palette = j.optString("palette", d.palette),
             tabs = strs("tabs")?.filter { it in LauncherConfig.ALL_TABS } ?: d.tabs,
-            clockPages = strs("clockPages")?.filter { it in LauncherConfig.ALL_CLOCK_PAGES }?.ifEmpty { null } ?: d.clockPages,
+            // Empty is allowed: no clock/date at all.
+            clockPages = strs("clockPages")?.filter { it in LauncherConfig.ALL_CLOCK_PAGES } ?: d.clockPages,
             pinned = strs("pinned") ?: d.pinned,
             hidden = strs("hidden")?.toSet() ?: d.hidden,
             hiddenCalendars = j.optJSONArray("hiddenCalendars")?.let { a -> (0 until a.length()).map { a.getLong(it) }.toSet() } ?: d.hiddenCalendars,
@@ -160,7 +190,6 @@ object Settings {
             slideshowSeconds = j.optInt("slideshowSeconds", d.slideshowSeconds),
             photoSource = j.optString("photoSource", d.photoSource),
             iconSize = j.optString("iconSize", d.iconSize),
-            showLabels = j.optBoolean("showLabels", d.showLabels),
             themedIcons = j.optBoolean("themedIcons", d.themedIcons),
             // v1 stored "hidden" as the old default: from v2 the gesture bar is visible unless chosen otherwise.
             navBar = if (j.optInt("configVersion", 1) >= 2 && j.optString("navBar") == "hidden") "hidden" else "visible",
@@ -175,12 +204,28 @@ object Settings {
             statusPill = j.optBoolean("statusPill", d.statusPill),
             paletteSeed = j.optInt("paletteSeed", d.paletteSeed),
             setupVersion = j.optInt("setupVersion", d.setupVersion),
+            showLabels = j.optBoolean("showLabels", d.showLabels),
+            showIcons = j.optBoolean("showIcons", d.showIcons) || !j.optBoolean("showLabels", d.showLabels),
+            labelSize = j.optString("labelSize", d.labelSize),
+            autoOpenSingle = j.optBoolean("autoOpenSingle", d.autoOpenSingle),
+            renamed = j.optJSONObject("renamed")?.let { o -> o.keys().asSequence().associateWith { o.getString(it) } } ?: d.renamed,
+            appLongPress = j.optString("appLongPress", d.appLongPress),
+            searchBar = j.optBoolean("searchBar", d.searchBar),
+            searchApp = j.optString("searchApp", d.searchApp),
+            cameraButton = j.optBoolean("cameraButton", d.cameraButton),
+            agendaView = j.optString("agendaView", d.agendaView),
+            homeProvider = j.optString("homeProvider", d.homeProvider),
+            haUrl = j.optString("haUrl", d.haUrl),
+            haToken = j.optString("haToken", d.haToken),
             pcHost = j.optString("pcHost", d.pcHost),
             pcPort = j.optInt("pcPort", d.pcPort),
             pcToken = j.optString("pcToken", d.pcToken),
         )
     }
 }
+
+/** Name shown for an app (custom name if renamed). */
+fun LauncherConfig.labelOf(a: AppEntry) = renamed[a.key] ?: a.label
 
 /** Paired with a PC running phonedash (`phonedash pair-launcher`): only then PC/DMS options make sense. */
 val LauncherConfig.pcPaired get() = pcHost.isNotBlank() && pcToken.isNotBlank()

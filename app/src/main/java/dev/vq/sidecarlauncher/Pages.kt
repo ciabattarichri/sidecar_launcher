@@ -135,12 +135,21 @@ fun HomePage(modifier: Modifier) {
     val p = LocalPalette.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val ui by GoogleHome.ui.collectAsState()
-    var showHidden by remember { mutableStateOf(false) }
     // Observed (not a one-off read) so hiding/restoring a device updates the grid immediately.
     val cfg by Settings.state.collectAsState()
+    val ha = cfg.homeProvider == "ha"
+    val ui by (if (ha) HomeAssistant.ui else GoogleHome.ui).collectAsState()
+    var showHidden by remember { mutableStateOf(false) }
 
-    if (!ui.signedIn) {
+    if (ha && (cfg.haUrl.isBlank() || cfg.haToken.isBlank())) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            Text(tr("Imposta indirizzo e token di Home Assistant in Impostazioni → Casa, meteo, Billable (pizzico).",
+                "Set the Home Assistant address and token in Settings → Home, weather, Billable (pinch)."),
+                style = textStyle(15, p.onSurfaceVariant, 400), textAlign = TextAlign.Center)
+        }
+        return
+    }
+    if (!ha && !ui.signedIn) {
         Box(modifier, contentAlignment = Alignment.Center) {
             Pill(
                 Modifier.clickable { context.startActivity(Intent(context, LoginActivity::class.java)) },
@@ -168,7 +177,7 @@ fun HomePage(modifier: Modifier) {
         items(ui.devices.filter { showHidden || it.id !in hidden }, key = { it.id }) { d ->
             DevicePill(
                 d, isHidden = d.id in hidden,
-                onToggle = { scope.launch { GoogleHome.toggle(d) } },
+                onToggle = { scope.launch { if (ha) HomeAssistant.toggle(cfg.haUrl, cfg.haToken, d) else GoogleHome.toggle(d) } },
                 onLongPress = { Settings.toggleDevice(d.id) },
             )
         }

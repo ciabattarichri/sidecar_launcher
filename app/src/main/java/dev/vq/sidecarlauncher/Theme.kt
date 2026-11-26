@@ -201,6 +201,10 @@ object Sym {
     const val CAMERA = '\ue412'
     const val BATTERY = '\uf304'
     const val BATTERY_BOLT = '\uf305'
+    const val EDIT = '\uf097'
+    const val DELETE = '\ue92e'
+    const val CHEVRON_LEFT = '\ue5cb'
+    const val CHEVRON_RIGHT = '\ue5cc'
 }
 
 @Composable

@@ -73,4 +73,18 @@ object Apps {
 
     fun launch(e: AppEntry) = runCatching { la.startMainActivity(e.component, e.user, null, null) }
     fun info(e: AppEntry) = runCatching { la.startAppDetailsActivity(e.component, e.user, null, null) }
+
+    /** System apps (preinstalled, not updatable-away) can't be uninstalled, only disabled from app info. */
+    fun removable(e: AppEntry) = runCatching {
+        la.getApplicationInfo(e.component.packageName, 0, e.user).flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM == 0
+    }.getOrDefault(false)
+
+    /** System uninstall confirmation (needs REQUEST_DELETE_PACKAGES). */
+    fun uninstall(e: AppEntry) = runCatching {
+        app.startActivity(
+            android.content.Intent(android.content.Intent.ACTION_DELETE, android.net.Uri.fromParts("package", e.component.packageName, null))
+                .putExtra(android.content.Intent.EXTRA_USER, e.user)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
 }

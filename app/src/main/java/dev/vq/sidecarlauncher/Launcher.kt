@@ -86,7 +86,8 @@ fun LauncherScreen(nowPlaying: NowPlayingSource, onSettings: () -> Unit) {
     var weather by remember { mutableStateOf<Weather?>(null) }
     WhileResumed(cfg.city, periodMs = 15 * 60_000L) { WeatherRepo.load(ctx, cfg.city)?.let { weather = it } }
     val home by GoogleHome.ui.collectAsState()
-    WhileResumed(home.signedIn, "home" in cfg.tabs, periodMs = 30_000L) { if (home.signedIn && "home" in cfg.tabs) GoogleHome.refresh() }
+    WhileResumed(home.signedIn, "home" in cfg.tabs, cfg.homeProvider, periodMs = 30_000L) { if (home.signedIn && "home" in cfg.tabs && cfg.homeProvider == "google") GoogleHome.refresh() }
+    WhileResumed(cfg.haUrl, cfg.haToken, "home" in cfg.tabs, cfg.homeProvider, periodMs = 30_000L) { if ("home" in cfg.tabs && cfg.homeProvider == "ha") HomeAssistant.refresh(cfg.haUrl, cfg.haToken) }
     WhileResumed(cfg.billableUrl, cfg.billableToken, periodMs = 5 * 60_000L) { Billable.refresh(cfg.billableUrl, cfg.billableToken) }
 
     // Player visibility: playing, or paused for less than 5 s (2 s tick only while something is paused).
@@ -133,6 +134,8 @@ fun LauncherScreen(nowPlaying: NowPlayingSource, onSettings: () -> Unit) {
         if (cfg.statusBar == "hidden") StatusLine(cfg.statusNotifs, cfg.statusStyle == "mono", cfg.statusPill, onTap = { Intents.notificationShade(ctx) })
         // No widget tabs: the clock moves to the top, horizontal like desk_sidecar.
         val topless = cfg.tabs.isEmpty()
+        // Clock on top only without widget tabs, and only if the clock page is on (it can be removed altogether).
+        val topClock = topless && "clock" in cfg.clockPages
         val togglePlayer = { playerShown = !(playerShown || visibleTrack != null) }
         // ---- Top half: widgets (+ player when something plays) --------------------------------------
         // While searching apps the widgets smoothly fold away (weight → 0 + fade), so results fill the
@@ -152,7 +155,7 @@ fun LauncherScreen(nowPlaying: NowPlayingSource, onSettings: () -> Unit) {
                 if (emptyMode || t == null) EmptyPlayer(onOpen = { playerShown = false }) else MediaCard(t, nowPlaying, lastTouch)
             }
         // The top half stays the top half (the app list keeps the bottom one, for one-hand use).
-        if (topWeight > 0.001f) Column(
+        if (!topless || topClock) { if (topWeight > 0.001f) Column(
             Modifier.weight(topWeight).fillMaxWidth().clipToBounds().graphicsLayer { alpha = topWeight },
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -173,15 +176,15 @@ fun LauncherScreen(nowPlaying: NowPlayingSource, onSettings: () -> Unit) {
             )
             Player()
             }
-        }
+        } } else if (!searching) Player()
         // ---- Bottom half: clock pager + app list -------------------------------------------------------
         // With the clock on top the side column keeps only the other pages (billable); none → full-width list.
         val snap by Billable.snapshot.collectAsState()
-        val side = !topless || ("billable" in cfg.clockPages && snap != null)
+        val side = cfg.clockPages.any { (it == "clock" && !topless) || (it == "billable" && snap != null) }
         val fullList = !side && cfg.appListWidth == "full" && cfg.showLabels
         if (fullList) Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             AppList(Modifier.weight(1f).fillMaxWidth()) { searching = it }
-            SearchBar()
+            SearchBar(cfg)
         } else Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (cfg.leftHanded) {
                 AppList(Modifier.weight(0.56f).fillMaxHeight()) { searching = it }
@@ -192,6 +195,7 @@ fun LauncherScreen(nowPlaying: NowPlayingSource, onSettings: () -> Unit) {
             }
         }
     }
+        RenameDialog()
         // Long press on the photo widget: full-screen slideshow (tap to close), like desk_sidecar's frame.
         if (fullscreenPhotos) {
             androidx.activity.compose.BackHandler { fullscreenPhotos = false }
@@ -242,22 +246,24 @@ private fun WidgetCard(agenda: List<CalEvent>, weather: Weather?, onSettings: ()
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                 ) {
                     MIcon(icon, 18.dp, fg, filled = sel)
-                    if (sel) Text(label.split("|").let { if (I18n.en) it.last() else it.first() }, style = textStyle(14, fg, 600))
+                    val l = if (key == "agenda" && cfg.agendaView == "month") "Calendario|Calendar" else label
+                    if (sel) Text(l.split("|").let { if (I18n.en) it.last() else it.first() }, style = textStyle(14, fg, 600))
                 }
             }
         }
         HorizontalPager(pager, Modifier.weight(1f).fillMaxWidth(), key = { tabs.getOrElse(it) { "" } }) { page ->
             val key = tabs.getOrNull(page)
             // Long press on a widget opens the full app behind it.
-            val longPress = Modifier.pointerInput(key) {
+            val longPress = Modifier.pointerInput(key, cfg.homeProvider, cfg.haUrl) {
                 detectTapGestures(
-                    onLongPress = { if (key == "photos") onPhotos() else key?.let { Intents.openFor(ctx, it) } },
+                    onLongPress = { if (key == "photos") onPhotos() else key?.let { Intents.openFor(ctx, it, cfg) } },
                 )
             }
             val m = Modifier.fillMaxSize().then(longPress).padding(12.dp)
             when (key) {
                 "notifications" -> NotificationsPage(m)
-                "agenda" -> AgendaPage(agenda, Modifier.fillMaxSize().then(longPress).padding(horizontal = 16.dp, vertical = 12.dp))
+                "agenda" -> if (cfg.agendaView == "month") MonthPage(agenda, Modifier.fillMaxSize().then(longPress).padding(horizontal = 12.dp, vertical = 8.dp))
+                    else AgendaPage(agenda, Modifier.fillMaxSize().then(longPress).padding(horizontal = 16.dp, vertical = 12.dp))
                 "home" -> HomePage(m)
                 "weather" -> WeatherTab(weather, Modifier.fillMaxSize().then(longPress).padding(horizontal = 14.dp, vertical = 12.dp))
                 "photos" -> PhotoPage(m)
@@ -277,7 +283,8 @@ private fun ClockPager(now: LocalDateTime, onSettings: () -> Unit, modifier: Mod
     val p = LocalPalette.current
     val cfg by Settings.state.collectAsState()
     val snap by Billable.snapshot.collectAsState()
-    val pages = cfg.clockPages.filter { (it != "billable" || snap != null) && (withClock || it != "clock") }.ifEmpty { listOf("clock") }
+    val pages = cfg.clockPages.filter { (it != "billable" || snap != null) && (withClock || it != "clock") }
+    if (pages.isEmpty()) { Column(modifier, verticalArrangement = Arrangement.Bottom) { SearchBar(cfg) }; return }
     val count = if (pages.size > 1) 10_000 else 1
     val pager = rememberPagerState(initialPage = if (count > 1) 5_000 - 5_000 % pages.size else 0) { count }
     Column(modifier) {
@@ -295,8 +302,10 @@ private fun ClockPager(now: LocalDateTime, onSettings: () -> Unit, modifier: Mod
                 }
             }
         }
-        Spacer(Modifier.height(10.dp))
-        SearchBar()
+        if (cfg.searchBar || cfg.cameraButton) {
+            Spacer(Modifier.height(10.dp))
+            SearchBar(cfg)
+        }
     }
 }
 
@@ -322,7 +331,7 @@ private fun ClockPage(now: LocalDateTime, onSettings: () -> Unit) {
 @Composable
 private fun SideColumn(pages: Boolean, now: LocalDateTime, onSettings: () -> Unit, modifier: Modifier, withClock: Boolean) {
     if (pages) ClockPager(now, onSettings, modifier, withClock)
-    else Column(modifier, verticalArrangement = Arrangement.Bottom) { SearchBar() }
+    else Column(modifier, verticalArrangement = Arrangement.Bottom) { SearchBar(Settings.state.collectAsState().value) }
 }
 
 /** Horizontal clock + date/weather pills at the top, used when every widget tab is turned off. */
@@ -391,21 +400,33 @@ private fun iconDp(c: LauncherConfig) = when (c.iconSize) { "large" -> 46.dp; "x
 private fun AppList(modifier: Modifier, onSearching: (Boolean) -> Unit) {
     val p = LocalPalette.current
     val cfg by Settings.state.collectAsState()
-    val all by Apps.list.collectAsState()
+    val raw by Apps.list.collectAsState()
+    // Custom names: shown and sorted by the name you gave them.
+    val all = remember(raw, cfg.renamed) {
+        if (cfg.renamed.isEmpty()) raw else {
+            val col = java.text.Collator.getInstance().apply { strength = java.text.Collator.PRIMARY }
+            raw.sortedWith { a, b -> col.compare(cfg.labelOf(a), cfg.labelOf(b)) }
+        }
+    }
     val byKey = remember(all) { all.associateBy { it.key } }
     var query by remember { mutableStateOf<String?>(null) } // null = search closed
     val q = query?.trim().orEmpty()
     val searching = query != null
     LaunchedEffect(searching) { onSearching(searching) }
     // While searching: every app matching, hidden ones included (shown dimmed).
-    val matches = if (searching) all.filter { q.isEmpty() || it.label.contains(q, ignoreCase = true) } else emptyList()
+    val matches = if (searching) all.filter { q.isEmpty() || cfg.labelOf(it).contains(q, ignoreCase = true) || it.label.contains(q, ignoreCase = true) } else emptyList()
+    // Optional: one app left → open it (short pause so it doesn't fire mid-word).
+    val single = matches.singleOrNull()?.takeIf { cfg.autoOpenSingle && q.isNotEmpty() }
+    LaunchedEffect(single?.key, q) {
+        if (single != null) { delay(350); Apps.launch(single); query = null }
+    }
     val pinned = if (searching) emptyList() else cfg.pinned.mapNotNull { byKey[it] }.filter { it.key !in cfg.hidden }
     val rest = if (searching) matches else all.filter { it.key !in cfg.hidden && it.key !in cfg.pinned }
     val box = modifier.clip(RoundedCornerShape(28.dp)).background(p.surfaceContainerLow)
     if (searching) androidx.activity.compose.BackHandler { query = null }
     Column(box) {
         AppSearch(query, onQuery = { query = it }, onSubmit = { matches.firstOrNull()?.let { Apps.launch(it); query = null } })
-        AppListBody(Modifier.weight(1f), cfg, pinned, rest, dimHidden = searching)
+        AppListBody(Modifier.weight(1f), cfg, pinned, rest, searching = searching)
     }
 }
 
@@ -437,7 +458,7 @@ private fun AppSearch(query: String?, onQuery: (String?) -> Unit, onSubmit: () -
 }
 
 @Composable
-private fun AppListBody(modifier: Modifier, cfg: LauncherConfig, pinned: List<AppEntry>, rest: List<AppEntry>, dimHidden: Boolean) {
+private fun AppListBody(modifier: Modifier, cfg: LauncherConfig, pinned: List<AppEntry>, rest: List<AppEntry>, searching: Boolean) {
     val p = LocalPalette.current
     val box = modifier
     if (!cfg.showLabels) {
@@ -449,7 +470,7 @@ private fun AppListBody(modifier: Modifier, cfg: LauncherConfig, pinned: List<Ap
                     pinned.forEach { key(it.key) { AppRow(it, pinned = true, iconOnly = true) } }
                 }
             }
-            items(rest, key = { it.key }) { AppRow(it, pinned = false, iconOnly = true, dim = dimHidden && it.key in cfg.hidden) }
+            items(rest, key = { it.key }) { AppRow(it, pinned = searching && it.key in cfg.pinned, iconOnly = true, dim = searching && it.key in cfg.hidden, inSearch = searching) }
         }
         return
     }
@@ -460,13 +481,13 @@ private fun AppListBody(modifier: Modifier, cfg: LauncherConfig, pinned: List<Ap
                 pinned.forEach { key(it.key) { AppRow(it, pinned = true) } }
             }
         }
-        items(rest, key = { it.key }) { AppRow(it, pinned = false, dim = dimHidden && it.key in cfg.hidden) }
+        items(rest, key = { it.key }) { AppRow(it, pinned = searching && it.key in cfg.pinned, dim = searching && it.key in cfg.hidden, inSearch = searching) }
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AppRow(app: AppEntry, pinned: Boolean, iconOnly: Boolean = false, dim: Boolean = false) {
+private fun AppRow(app: AppEntry, pinned: Boolean, iconOnly: Boolean = false, dim: Boolean = false, inSearch: Boolean = false) {
     val p = LocalPalette.current
     val cfg by Settings.state.collectAsState()
     val density = LocalDensity.current
@@ -475,7 +496,10 @@ private fun AppRow(app: AppEntry, pinned: Boolean, iconOnly: Boolean = false, di
     val threshold = with(density) { 72.dp.toPx() }
     val fg = p.primary.toArgbInt()
     val bg = p.primaryContainer.toArgbInt()
-    val icon by produceState<android.graphics.Bitmap?>(null, app.key, px, cfg.themedIcons, fg, bg) { value = Apps.icon(app, px, cfg.themedIcons, fg, bg) }
+    val withIcon = cfg.showIcons || iconOnly
+    val icon by produceState<android.graphics.Bitmap?>(null, app.key, px, cfg.themedIcons, fg, bg, withIcon) { if (withIcon) value = Apps.icon(app, px, cfg.themedIcons, fg, bg) }
+    var menu by remember { mutableStateOf(false) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val offset = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
     Box(Modifier.fillMaxWidth()) {
@@ -493,7 +517,8 @@ private fun AppRow(app: AppEntry, pinned: Boolean, iconOnly: Boolean = false, di
                         onDragEnd = {
                             val v = offset.value
                             scope.launch {
-                                if (v > threshold) Settings.togglePin(app.key) else if (v < -threshold) Settings.toggleHidden(app.key)
+                                if (v > threshold) { Settings.togglePin(app.key); haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm) }
+                                else if (v < -threshold) { Settings.toggleHidden(app.key); haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm) }
                                 offset.animateTo(0f)
                             }
                         },
@@ -505,16 +530,88 @@ private fun AppRow(app: AppEntry, pinned: Boolean, iconOnly: Boolean = false, di
                 }
                 .clip(RoundedCornerShape(18.dp))
                 .background(if (offset.value != 0f) p.surfaceContainerLow else Color.Transparent)
-                .combinedClickable(onClick = { Apps.launch(app) }, onLongClick = { Apps.info(app) })
+                .combinedClickable(onClick = { Apps.launch(app) }, onLongClick = { if (cfg.appLongPress == "menu") menu = true else Apps.info(app) })
                 .then(if (dim) Modifier.alpha(0.45f) else Modifier)
-                .padding(horizontal = if (iconOnly) 4.dp else 10.dp, vertical = if (iconOnly) 6.dp else 7.dp),
+                .padding(horizontal = if (iconOnly) 4.dp else if (withIcon) 10.dp else 14.dp, vertical = if (iconOnly) 6.dp else if (withIcon) 7.dp else 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (iconOnly) Arrangement.Center else Arrangement.Start,
         ) {
-            Box(Modifier.size(iconSize)) { icon?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize()) } }
+            if (withIcon) Box(Modifier.size(iconSize)) { icon?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize()) } }
             if (!iconOnly) {
-                Spacer(Modifier.width(12.dp))
-                Text(app.label, style = textStyle(if (cfg.iconSize == "normal") 16 else 17, p.onSurface, if (pinned) 600 else 400), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (withIcon) Spacer(Modifier.width(12.dp))
+                Text(cfg.labelOf(app), style = textStyle(labelSp(cfg), p.onSurface, if (pinned) 600 else 400), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                // While searching, pinned apps are marked (swipe right toggles it: you see it happen).
+                if (inSearch && pinned) MIcon(Sym.PIN, 18.dp, p.primary, filled = true)
+            }
+        }
+        if (menu) AppMenu(app, cfg, onDismiss = { menu = false })
+    }
+}
+
+private fun labelSp(c: LauncherConfig) = when (c.labelSize) { "small" -> 14; "large" -> 18; "xl" -> 21; else -> if (c.iconSize == "normal" || !c.showIcons) 16 else 17 }
+
+/** Long-press menu on an app (when chosen in settings): rename, pin, hide, info, uninstall. */
+@Composable
+private fun AppMenu(app: AppEntry, cfg: LauncherConfig, onDismiss: () -> Unit) {
+    val p = LocalPalette.current
+    val removable = remember(app.key) { Apps.removable(app) }
+    androidx.compose.material3.MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(surfaceContainer = p.surfaceContainerHigh, surface = p.surfaceContainerHigh)) {
+    DropdownMenu(expanded = true, onDismissRequest = onDismiss, shape = RoundedCornerShape(20.dp), containerColor = p.surfaceContainerHigh) {
+        @Composable
+        fun entry(icon: Char, label: String, enabled: Boolean = true, action: () -> Unit) = DropdownMenuItem(
+            text = { Text(label, style = textStyle(15, if (enabled) p.onSurface else p.outline, 500)) },
+            leadingIcon = { MIcon(icon, 20.dp, if (enabled) p.primary else p.outline) },
+            enabled = enabled,
+            onClick = { onDismiss(); action() },
+        )
+        Text(cfg.labelOf(app), style = textStyle(13, p.onSurfaceVariant, 600), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp).widthIn(max = 220.dp))
+        entry(Sym.EDIT, tr("Rinomina", "Rename")) { AppMenuState.renaming.value = app }
+        entry(Sym.PIN, if (app.key in cfg.pinned) tr("Togli dai preferiti", "Unpin") else tr("Fissa in cima", "Pin to top")) { Settings.togglePin(app.key) }
+        entry(Sym.HIDE, if (app.key in cfg.hidden) tr("Mostra", "Unhide") else tr("Nascondi", "Hide")) { Settings.toggleHidden(app.key) }
+        entry(Sym.INFO, tr("Info app", "App info")) { Apps.info(app) }
+        entry(Sym.DELETE, tr("Disinstalla", "Uninstall"), enabled = removable) { Apps.uninstall(app) }
+    }
+    }
+}
+
+object AppMenuState {
+    val renaming = kotlinx.coroutines.flow.MutableStateFlow<AppEntry?>(null)
+}
+
+/** "Rename app" sheet: empty name or "Original" restores the app's own name. */
+@Composable
+private fun RenameDialog() {
+    val p = LocalPalette.current
+    val cfg by Settings.state.collectAsState()
+    val app = AppMenuState.renaming.collectAsState().value ?: return
+    var text by remember(app.key) { mutableStateOf(cfg.labelOf(app)) }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    fun close() { AppMenuState.renaming.value = null }
+    androidx.activity.compose.BackHandler { close() }
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)).pointerInput(Unit) { detectTapGestures { close() } }.imePadding(),
+        contentAlignment = Alignment.Center) {
+        Column(Modifier.padding(24.dp).clip(RoundedCornerShape(28.dp)).background(p.surfaceContainerHigh)
+                .pointerInput(Unit) { detectTapGestures { } }.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(tr("Rinomina app", "Rename app"), style = textStyle(20, p.onSurface, 700))
+            Text(tr("Nome originale: ${app.label}", "Original name: ${app.label}"), style = textStyle(13, p.onSurfaceVariant, 500))
+            androidx.compose.foundation.text.BasicTextField(
+                value = text, onValueChange = { text = it }, singleLine = true,
+                textStyle = textStyle(16, p.onSurface, 500), cursorBrush = androidx.compose.ui.graphics.SolidColor(p.primary),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { Settings.rename(app.key, text.takeIf { it.trim() != app.label }); close() }),
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(p.surfaceContainerHighest).padding(horizontal = 14.dp, vertical = 12.dp).focusRequester(focus),
+            )
+            LaunchedEffect(Unit) { focus.requestFocus() }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                if (app.key in cfg.renamed) Pill(Modifier.clickable { Settings.rename(app.key, null); close() }, background = p.surfaceContainerHighest) {
+                    Text(tr("Originale", "Original"), style = textStyle(15, p.onSurface, 600))
+                }
+                Pill(Modifier.clickable { close() }, background = p.surfaceContainerHighest) { Text(tr("Annulla", "Cancel"), style = textStyle(15, p.onSurface, 600)) }
+                Pill(Modifier.clickable { Settings.rename(app.key, text.takeIf { it.trim() != app.label }); close() }, background = p.primary) {
+                    Text(tr("Salva", "Save"), style = textStyle(15, p.onPrimary, 600))
+                }
             }
         }
     }
@@ -589,15 +686,16 @@ private fun Modifier.onPinchIn(action: () -> Unit) = pointerInput(Unit) {
 // ---- Google search + camera (bottom-left) ------------------------------------
 
 @Composable
-private fun SearchBar() {
+private fun SearchBar(cfg: LauncherConfig) {
     val p = LocalPalette.current
     val ctx = LocalContext.current
+    if (!cfg.searchBar && !cfg.cameraButton) return
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Pill(Modifier.weight(1f).clickable { Intents.search(ctx) }, background = p.surfaceContainerHigh) {
+        if (cfg.searchBar) Pill(Modifier.weight(1f).clickable { Intents.search(ctx, cfg.searchApp) }, background = p.surfaceContainerHigh) {
             MIcon(Sym.SEARCH, 20.dp, p.primary)
             Text(tr("Cerca", "Search"), style = textStyle(15, p.onSurfaceVariant, 500), maxLines = 1)
         }
-        Box(Modifier.size(44.dp).clip(CircleShape).background(p.surfaceContainerHigh).clickable { Intents.camera(ctx) }, contentAlignment = Alignment.Center) {
+        if (cfg.cameraButton) Box(Modifier.size(44.dp).clip(CircleShape).background(p.surfaceContainerHigh).clickable { Intents.camera(ctx) }, contentAlignment = Alignment.Center) {
             MIcon(Sym.CAMERA, 22.dp, p.primary)
         }
     }
@@ -617,8 +715,20 @@ object Intents {
         start(ctx, android.content.Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS)) || app(ctx, "com.google.android.deskclock")
     }
 
-    fun search(ctx: android.content.Context) {
+    /** [pkg] blank = Google search; otherwise that browser (falls back to Google if it's gone). */
+    fun search(ctx: android.content.Context, pkg: String = "") {
+        if (pkg.isNotBlank() && pkg != GSA && app(ctx, pkg)) return
         start(ctx, android.content.Intent("android.search.action.GLOBAL_SEARCH").setPackage(GSA)) || app(ctx, GSA)
+    }
+
+    /** Installed browsers (package to label), for the search pill setting. */
+    fun browsers(ctx: android.content.Context): List<Pair<String, String>> {
+        val pm = ctx.packageManager
+        val i = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://example.com")).addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+        return pm.queryIntentActivities(i, android.content.pm.PackageManager.ResolveInfoFlags.of(android.content.pm.PackageManager.MATCH_ALL.toLong()))
+            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+            .filter { it.first != GSA && pm.getLaunchIntentForPackage(it.first) != null }
+            .distinctBy { it.first }.sortedBy { it.second.lowercase() }
     }
 
     /** Opens the notification shade (StatusBarManager.expandNotificationsPanel, needs EXPAND_STATUS_BAR). */
@@ -641,11 +751,13 @@ object Intents {
             start(ctx, android.content.Intent().setClassName(GSA, "com.google.android.apps.lens.MainActivity")) || app(ctx, GSA)
     }
 
-    fun openFor(ctx: android.content.Context, tab: String) {
+    fun openFor(ctx: android.content.Context, tab: String, cfg: LauncherConfig) {
         when (tab) {
             "agenda" -> app(ctx, "com.google.android.calendar") ||
                 start(ctx, android.content.Intent(android.content.Intent.ACTION_VIEW, android.provider.CalendarContract.CONTENT_URI.buildUpon().appendPath("time").build()))
-            "home" -> app(ctx, "com.google.android.apps.chromecast.app")
+            "home" -> if (cfg.homeProvider == "ha") app(ctx, "io.homeassistant.companion.android") || app(ctx, "io.homeassistant.companion.android.minimal") ||
+                    (cfg.haUrl.isNotBlank() && start(ctx, android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(cfg.haUrl))))
+                else app(ctx, "com.google.android.apps.chromecast.app")
             "weather" -> app(ctx, "com.google.android.apps.weather") ||
                 start(ctx, android.content.Intent(android.content.Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, tr("meteo", "weather")))
             "photos" -> app(ctx, "com.google.android.apps.photos")
@@ -753,7 +865,7 @@ private fun NotifCarousel(groups: List<NotifGroup>, c: StatusColors) {
     ) { gr ->
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             NotifIcon(gr, c.accent)
-            Text(gr.app, style = textStyle(14, c.text, 600), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (gr.app.length > 15) gr.app.take(15).trimEnd() + "…" else gr.app, style = textStyle(14, c.text, 600), maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (gr.count > 1) Text("${gr.count}", style = textStyle(13, c.dim, 600))
         }
     }

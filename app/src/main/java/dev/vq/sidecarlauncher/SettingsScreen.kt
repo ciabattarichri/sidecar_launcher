@@ -111,20 +111,31 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit, initialPage: 
             item { NavBarChoice(cfg) }
             item {
                 val sizes = listOf("normal", "large", "xl")
-                Choice(tr("Icone app", "App icons"), listOf("Normali", tr("Grandi", "Large"), tr("Molto grandi", "Extra large")).let { if (I18n.en) listOf("Normal", "Large", "Extra large") else it },
-                    sizes.indexOf(cfg.iconSize).coerceAtLeast(0)) { i -> Settings.update { it.copy(iconSize = sizes[i]) } }
+                Dimmed(cfg.showIcons, tr("Solo con le icone visibili", "Only with icons shown")) { Choice(tr("Icone app", "App icons"), listOf("Normali", tr("Grandi", "Large"), tr("Molto grandi", "Extra large")).let { if (I18n.en) listOf("Normal", "Large", "Extra large") else it },
+                    sizes.indexOf(cfg.iconSize).coerceAtLeast(0)) { i -> Settings.update { it.copy(iconSize = sizes[i]) } } }
             }
             item {
                 val note = if (!cfg.showLabels) tr("Con solo icone la lista resta a metà", "With icons only the list stays half width")
                     else tr("Vale quando accanto alla lista non c'è niente", "Applies when nothing sits beside the list")
-                val topless = cfg.tabs.isEmpty()
-                val billableSide = "billable" in cfg.clockPages && Pebble.billableAvailable(ctx, cfg)
-                Dimmed(cfg.showLabels && topless && !billableSide, note) {
+                val sideBusy = cfg.clockPages.any { (it == "clock" && cfg.tabs.isNotEmpty()) || (it == "billable" && Pebble.billableAvailable(ctx, cfg)) }
+                Dimmed(cfg.showLabels && !sideBusy, note) {
                     Choice(tr("Larghezza lista app", "App list width"), listOf(tr("Metà", "Half"), tr("Tutta la larghezza", "Full width")),
                         if (cfg.appListWidth == "full" && cfg.showLabels) 1 else 0) { i -> Settings.update { it.copy(appListWidth = if (i == 1) "full" else "half") } }
                 }
             }
-            item { Choice(tr("Nomi delle app", "App names"), listOf(tr("Mostra", "Show"), tr("Solo icone", "Icons only")), if (cfg.showLabels) 0 else 1) { i -> Settings.update { it.copy(showLabels = i == 0) } } }
+            item {
+                val cur = when { !cfg.showLabels -> 1; !cfg.showIcons -> 2; else -> 0 }
+                Choice(tr("Nella lista app", "App list shows"), listOf(tr("Icone e nomi", "Icons and names"), tr("Solo icone", "Icons only"), tr("Solo nomi", "Names only")), cur) { i ->
+                    Settings.update { it.copy(showLabels = i != 1, showIcons = i != 2) }
+                }
+            }
+            item {
+                val sizes = listOf("small", "normal", "large", "xl")
+                Dimmed(cfg.showLabels, tr("Solo con i nomi visibili", "Only with names shown")) {
+                    Choice(tr("Dimensione nomi delle app", "App name size"), listOf(tr("Piccola", "Small"), tr("Normale", "Normal"), tr("Grande", "Large"), tr("Molto grande", "Extra large")),
+                        sizes.indexOf(cfg.labelSize).coerceAtLeast(0)) { i -> Settings.update { it.copy(labelSize = sizes[i]) } }
+                }
+            }
             item { Choice(tr("Icone a tema", "Themed icons"), listOf("Off", "On"), if (cfg.themedIcons) 1 else 0) { i -> Settings.update { it.copy(themedIcons = i == 1) } } }
             item {
             val langs = listOf("system", "it", "en")
@@ -156,7 +167,20 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit, initialPage: 
             }
 
             section(tr("Pagine sotto l'orologio (scorrevoli)", "Clock pages (swipe)"))
-            orderedList(cfg.clockPages, LauncherConfig.ALL_CLOCK_PAGES.filter { it != "billable" || Pebble.billableAvailable(ctx, cfg) }, ::clockPageName) { Settings.update { c -> c.copy(clockPages = it.ifEmpty { listOf("clock") }) } }
+            orderedList(cfg.clockPages, LauncherConfig.ALL_CLOCK_PAGES.filter { it != "billable" || Pebble.billableAvailable(ctx, cfg) }, ::clockPageName) { Settings.update { c -> c.copy(clockPages = it) } }
+
+            section(tr("In basso: ricerca e fotocamera", "Bottom: search and camera"))
+            item { Choice(tr("Barra di ricerca", "Search bar"), listOf(tr("Mostra", "Show"), tr("Nascondi", "Hide")), if (cfg.searchBar) 0 else 1) { i -> Settings.update { it.copy(searchBar = i == 0) } } }
+            item {
+                val browsers = remember { Intents.browsers(ctx) }
+                val keys = listOf("") + browsers.map { it.first }
+                Dimmed(cfg.searchBar, tr("Solo con la barra di ricerca", "Only with the search bar")) {
+                    Choice(tr("La ricerca apre", "Search opens"), listOf("Google") + browsers.map { it.second }, keys.indexOf(cfg.searchApp).coerceAtLeast(0)) { i ->
+                        Settings.update { it.copy(searchApp = keys[i]) }
+                    }
+                }
+            }
+            item { Choice(tr("Pulsante fotocamera", "Camera button"), listOf(tr("Mostra", "Show"), tr("Nascondi", "Hide")), if (cfg.cameraButton) 0 else 1) { i -> Settings.update { it.copy(cameraButton = i == 0) } } }
 
         }
         if (page == "apps") {
@@ -168,7 +192,7 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit, initialPage: 
                 item("pin:$k") {
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(p.surfaceContainer).padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Text(byKey.getValue(k).label, style = textStyle(15, p.onSurface, 500), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Text(cfg.labelOf(byKey.getValue(k)), style = textStyle(15, p.onSurface, 500), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         IconBtn(Sym.ARROW_UP, i > 0) { Settings.movePinned(k, -1) }
                         IconBtn(Sym.ARROW_DOWN, i < pinned.lastIndex) { Settings.movePinned(k, 1) }
                         IconBtn(Sym.CLOSE, true) { Settings.togglePin(k) }
@@ -176,13 +200,35 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit, initialPage: 
                 }
             }
 
+            section(tr("Comportamento", "Behaviour"))
+            item {
+                Choice(tr("Pressione lunga su un'app", "Long press on an app"), listOf(tr("Info app", "App info"), tr("Menu (rinomina, disinstalla…)", "Menu (rename, uninstall…)")),
+                    if (cfg.appLongPress == "menu") 1 else 0) { i -> Settings.update { it.copy(appLongPress = if (i == 1) "menu" else "info") } }
+            }
+            item {
+                Choice(tr("Ricerca: se resta una sola app, aprila subito", "Search: open the app when only one is left"), listOf("Off", "On"),
+                    if (cfg.autoOpenSingle) 1 else 0) { i -> Settings.update { it.copy(autoOpenSingle = i == 1) } }
+            }
+
+            section(tr("App rinominate", "Renamed apps"))
+            val renamed = apps.filter { it.key in cfg.renamed }
+            if (renamed.isEmpty()) item { Hint(tr("Nessuna. Con «Pressione lunga → Menu» puoi rinominare un'app.", "None. With «Long press → Menu» you can rename an app.")) }
+            renamed.forEach { a -> item("ren:" + a.key) { RowAction("${cfg.labelOf(a)} (${a.label})", tr("Ripristina", "Restore")) { Settings.rename(a.key, null) } } }
+
             section(tr("App nascoste", "Hidden apps"))
             val hidden = apps.filter { it.key in cfg.hidden }
             if (hidden.isEmpty()) item { Hint(tr("Nessuna. Scorri un'app verso sinistra per nasconderla.", "None. Swipe an app to the left to hide it.")) }
-            hidden.forEach { a -> item(a.key) { RowAction(a.label, tr("Mostra", "Show")) { Settings.toggleHidden(a.key) } } }
+            hidden.forEach { a -> item(a.key) { RowAction(cfg.labelOf(a), tr("Mostra", "Show")) { Settings.toggleHidden(a.key) } } }
 
         }
         if (page == "calendars") {
+            section(tr("Widget", "Widget"))
+            item {
+                Choice(tr("Vista", "View"), listOf(tr("Agenda (prossimi 7 giorni)", "Agenda (next 7 days)"), tr("Calendario del mese", "Month calendar")),
+                    if (cfg.agendaView == "month") 1 else 0) { i -> Settings.update { it.copy(agendaView = if (i == 1) "month" else "list") } }
+            }
+            if (cfg.agendaView == "month") item { Hint(tr("Frecce o swipe verticale sulla griglia per cambiare mese; tocca il titolo per tornare a oggi.",
+                "Arrows or a vertical swipe on the grid change month; tap the title to go back to today.")) }
             section(tr("Calendari", "Calendars"))
             calendars.forEach { c ->
                 item("cal${c.id}") {
@@ -193,8 +239,29 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit, initialPage: 
 
         }
         if (page == "services") {
-            section("Google Home")
+            section(tr("Casa", "Home"))
             item {
+                Choice(tr("Widget Casa", "Home widget"), listOf("Google Home", "Home Assistant"), if (cfg.homeProvider == "ha") 1 else 0) { i ->
+                    Settings.update { it.copy(homeProvider = if (i == 1) "ha" else "google") }
+                }
+            }
+            if (cfg.homeProvider == "ha") {
+                item { Hint(tr("Indirizzo (es. http://homeassistant.local:8123) e un token di accesso a lunga durata (Home Assistant → Profilo → Sicurezza).",
+                    "Address (e.g. http://homeassistant.local:8123) and a long-lived access token (Home Assistant → Profile → Security).")) }
+                item { Field(tr("Indirizzo Home Assistant", "Home Assistant address"), cfg.haUrl) { v -> Settings.update { it.copy(haUrl = v.trim()) } } }
+                item { Field(tr("Token di accesso", "Access token"), cfg.haToken, secret = true) { v -> Settings.update { it.copy(haToken = v.trim()) } } }
+                item {
+                    val ha by HomeAssistant.ui.collectAsState()
+                    val scope = rememberCoroutineScope()
+                    val status = when {
+                        cfg.haUrl.isBlank() || cfg.haToken.isBlank() -> tr("Non configurato", "Not set up")
+                        ha.error != null -> ha.error!!
+                        ha.devices.isNotEmpty() -> tr("${ha.devices.size} dispositivi", "${ha.devices.size} devices")
+                        else -> tr("Non ancora collegato", "Not connected yet")
+                    }
+                    RowAction(status, tr("Prova", "Test")) { scope.launch { HomeAssistant.refresh(cfg.haUrl, cfg.haToken) } }
+                }
+            } else item {
                 if (home.signedIn) RowAction(tr("Collegato", "Connected"), tr("Scollega", "Disconnect")) { GoogleHome.signOut() }
                 else RowAction(tr("Non collegato", "Not connected"), tr("Collega", "Connect"), highlighted = true) { ctx.startActivity(Intent(ctx, LoginActivity::class.java)) }
             }
@@ -272,9 +339,9 @@ private val CATEGORIES = listOf(
     Triple("look", "Aspetto", "Look"),
     Triple("animations", "Animazioni", "Animations"),
     Triple("home", "Widget e orologio", "Widgets and clock"),
-    Triple("apps", "App: preferite e nascoste", "Apps: pinned and hidden"),
+    Triple("apps", "App: preferite, nascoste, rinominate", "Apps: pinned, hidden, renamed"),
     Triple("calendars", "Calendari", "Calendars"),
-    Triple("services", "Google Home, meteo, Billable", "Google Home, weather, Billable"),
+    Triple("services", "Casa, meteo, Billable", "Home, weather, Billable"),
     Triple("photos", "Foto", "Photos"),
     Triple("system", "Sistema", "System"),
 )

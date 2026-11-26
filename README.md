@@ -32,8 +32,8 @@ Some of the looks you can pick in the settings:
 ┌───────────────────────────────┐
 │                    ⚡ 100%     │  battery (system status bar hidden by default)
 │ ┌───────────────────────────┐ │
-│ │ 🔔 📅 Agenda 🏠 ☀ 🖼        │ │  widgets: notifications · agenda · Google Home
-│ │                           │ │           weather (3-h table) · photos
+│ │ 🔔 📅 Agenda 🏠 ☀ 🖼        │ │  widgets: notifications · agenda or month calendar
+│ │                           │ │           Google Home or Home Assistant · weather · photos
 │ └───────────────────────────┘ │
 │ ┌───────────────────────────┐ │  player (only while something plays,
 │ │ ◎ title · artist  ⏮ ⏯ ⏭   │ │  or double-tap the widgets)
@@ -41,7 +41,7 @@ Some of the looks you can pick in the settings:
 │   17      ┌────────────────┐  │
 │   42      │ 🔍 Search apps │  │  clock (swipe: billable hours, rolling)
 │ [Tue 24]  │ ★ pinned apps  │  │  app list A–Z, pinned on top
-│ [🔍][📷]  │ A … Z          │  │  Google search · camera
+│ [🔍][📷]  │ A … Z          │  │  search (Google or a browser) · camera, both optional
 └───────────────────────────────┘
 ```
 
@@ -54,12 +54,13 @@ The app list moves to the left in left-handed mode.
 | anywhere | pinch in (two fingers) | launcher settings |
 | anywhere not scrolling | swipe down | notification shade |
 | custom status bar | tap | notification shade |
-| app | tap / long press | open / app info |
+| app | tap / long press | open / app info, or a menu: rename, pin, hide, app info, uninstall |
 | app | swipe right / left | pin–unpin / hide |
-| "Search apps" | type | search, hidden apps included; Enter opens the first |
+| "Search apps" | type | search (custom and original names), hidden apps included; Enter opens the first, or optionally the only match opens by itself |
 | clock | long press / swipe | Clock app / next page (billable hours) |
 | widgets (or the top half with the clock on top) | double tap, also over lists and buttons | show/hide the player; with no media session, an empty player that opens the last music app |
 | widget | long press | Calendar, Google Home, Weather, notification history; **Photos → full-screen slideshow** with clock, now playing and synced lyrics |
+| month calendar | arrows or vertical swipe / tap a day / tap the title | change month / that day's events / back to today |
 | Home widget device | tap / long press | toggle / hide |
 
 ## Settings
@@ -68,11 +69,13 @@ Grouped in categories: look (side; colours from the system, the PC (when paired)
 presets or any custom colour, generated with the Material You algorithm so they work on any phone;
 background (black, soft dark or an image, with DMS-style adjustable card and pill transparency);
 custom status bar (battery + notifications as dots or a rolling carousel, theme colours or white on
-black, optional pill) or the system one; gesture bar; app list width, icon size, labels or a centred
-icon column, themed icons; language system/IT/EN), animations, widgets & clock pages (no widget tabs →
-the clock moves to the top: left, centre or right),
-pinned & hidden apps, calendars, Google Home / weather / Billable Hours (only with a Pebble app
-installed), photos (gallery, or the PC folder when paired; album, duration, lyrics), system shortcuts
+black, optional pill) or the system one; gesture bar; app list width, icons and names / icons only (a
+centred column) / names only, icon and name size, themed icons; language system/IT/EN), animations,
+widgets & clock pages (no widget tabs → the clock moves to the top: left, centre or right; the clock
+can also be removed altogether; search pill opening Google or a browser, and camera button, each
+optional), apps (pinned, hidden, renamed; long press = app info or menu; open the only search match),
+calendars (agenda list or month view), Google Home or Home Assistant (URL + long-lived token) /
+weather / Billable Hours (only with a Pebble app installed), photos (gallery, or the PC folder when paired; album, duration, lyrics), system shortcuts
 (notification access, default launcher, black home wallpaper). Options that depend on another choice
 stay visible but greyed out, with a note. First run (and updates that add options) asks how you want
 the status and gesture bars.

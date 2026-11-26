@@ -68,6 +68,44 @@ object AgendaRepo {
         events.sortedWith(compareBy({ it.start.toLocalDate() }, { !it.allDay }, { it.start })).take(MAX_EVENTS)
     }
 
+    /** Every event touching the days [from]..[to] (past ones too), for the month view. */
+    suspend fun range(context: Context, hidden: Set<Long>, from: LocalDate, to: LocalDate): List<CalEvent> = withContext(Dispatchers.IO) {
+        if (context.checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) return@withContext emptyList()
+        val zone = ZoneId.systemDefault()
+        // Widened by a day each side: all-day events are stored as UTC midnights.
+        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
+            ContentUris.appendId(it, from.minusDays(1).atStartOfDay(zone).toInstant().toEpochMilli())
+            ContentUris.appendId(it, to.plusDays(2).atStartOfDay(zone).toInstant().toEpochMilli())
+        }.build()
+        val out = mutableListOf<CalEvent>()
+        try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(CalendarContract.Instances.TITLE, CalendarContract.Instances.BEGIN, CalendarContract.Instances.END,
+                    CalendarContract.Instances.ALL_DAY, CalendarContract.Instances.DISPLAY_COLOR, CalendarContract.Instances.CALENDAR_ID),
+                "${CalendarContract.Instances.VISIBLE} = 1", null, "${CalendarContract.Instances.BEGIN} ASC",
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    if (c.getLong(5) in hidden) continue
+                    val allDay = c.getInt(3) == 1
+                    val z = if (allDay) ZoneOffset.UTC else zone
+                    out += CalEvent(c.getString(0) ?: tr("(senza titolo)", "(no title)"),
+                        LocalDateTime.ofInstant(Instant.ofEpochMilli(c.getLong(1)), z),
+                        LocalDateTime.ofInstant(Instant.ofEpochMilli(c.getLong(2)), z), allDay, c.getInt(4))
+                }
+            }
+        } catch (_: SecurityException) {
+        }
+        out.sortedWith(compareBy({ !it.allDay }, { it.start }))
+    }
+
+    /** Days an event covers (end exclusive at midnight, so an all-day event is one day). */
+    fun days(e: CalEvent): Sequence<LocalDate> {
+        val first = e.start.toLocalDate()
+        val last = (if (e.end.toLocalTime() == java.time.LocalTime.MIDNIGHT && e.end.isAfter(e.start)) e.end.minusDays(1) else e.end).toLocalDate()
+        return generateSequence(first) { it.plusDays(1) }.takeWhile { !it.isAfter(maxOf(first, last)) }.take(62)
+    }
+
     data class CalendarInfo(val id: Long, val name: String, val account: String, val color: Int)
 
     /** Every visible calendar synced on the phone. */
