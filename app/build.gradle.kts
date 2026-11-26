@@ -11,8 +11,8 @@ android {
         applicationId = "dev.vq.sidecarlauncher"
         minSdk = 33
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
     buildTypes {
         release {
@@ -38,4 +38,6 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.12.4")
     implementation("androidx.core:core-ktx:1.19.0")
+    // Material You colour utilities (palettes from a seed colour); R8 strips the rest.
+    implementation("com.google.android.material:material:1.10.0")
 }

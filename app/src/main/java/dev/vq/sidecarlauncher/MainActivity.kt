@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private lateinit var nowPlaying: NowPlayingSource
     private val settingsOpen = mutableStateOf(false)
+    private val settingsPage = mutableStateOf<String?>(null)
     /** false as soon as we lose the top: the home fades to black so the recents transition looks clean. */
     private val onTop = mutableStateOf(true)
     private val palette = MutableStateFlow(Palette())
@@ -38,6 +39,7 @@ class MainActivity : ComponentActivity() {
         GoogleHome.init(this)
         nowPlaying = NowPlayingSource(this)
         PcLink.importPairing(intent)
+        demo(intent)
         refreshPalette()
 
         setContent {
@@ -51,7 +53,7 @@ class MainActivity : ComponentActivity() {
             // Language switch: restart so every string and formatter is rebuilt.
             val startLanguage = remember { cfg.language }
             LaunchedEffect(cfg.language) { if (cfg.language != startLanguage) recreate() }
-            LaunchedEffect(cfg.palette) { refreshPalette() }
+            LaunchedEffect(cfg.palette, cfg.paletteSeed, cfg.pcHost) { refreshPalette() }
             LaunchedEffect(cfg.navBar, cfg.statusBar) { applyNavBar() }
 
             val pal by palette.collectAsState()
@@ -65,12 +67,20 @@ class MainActivity : ComponentActivity() {
                     Modifier.fillMaxSize().background(Color.Black)
                 ) {
                     androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }) {
-                        LauncherScreen(nowPlaying, onSettings = { settingsOpen.value = true })
+                        // Background image: translucent widgets on the home only (settings and dialogs stay solid).
+                        val homePal = remember(pal, cfg.background, cfg.cardOpacity, cfg.pillOpacity) {
+                            if (cfg.background == "image") pal.translucent(cfg.cardOpacity / 100f, cfg.pillOpacity / 100f) else pal
+                        }
+                        CompositionLocalProvider(LocalPalette provides homePal) {
+                            LauncherScreen(nowPlaying, onSettings = { settingsOpen.value = true })
+                        }
                         PairingPrompt()
+                        if (!settingsOpen.value) SetupPrompt()
                         if (settingsOpen.value) {
                             SettingsScreen(
                                 onClose = { settingsOpen.value = false },
                                 requestPhotos = { perms.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES)) },
+                                initialPage = settingsPage.value,
                             )
                         }
                     }
@@ -79,12 +89,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Screenshot demo for the README, debug builds only. Look-only
+     * settings in memory, never saved; `demo_end` restores everything:
+     *   am start -n dev.vq.sidecarlauncher/.MainActivity --es demo_cfg '{"tabs":[],"palette":"seed"}' \
+     *     [--es demo_wallpaper content://…] [--es demo_settings look] | --ez demo_end true
+     */
+    private fun demo(i: Intent?) {
+        i ?: return
+        // Debug builds only (./gradlew assembleDebug): the release APK ignores these extras.
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        if (i.getBooleanExtra("demo_end", false)) {
+            Settings.endDemo(); Wallpaper.override.value = null; settingsOpen.value = false; refreshPalette(); return
+        }
+        i.getStringExtra("demo_cfg")?.let { runCatching { Settings.demo(org.json.JSONObject(it)) }.onFailure { e -> android.util.Log.w("SidecarLauncher", "demo: $e") } }
+        i.getStringExtra("demo_wallpaper")?.let { Wallpaper.override.value = android.net.Uri.parse(it) }
+        i.getStringExtra("demo_settings")?.let { settingsPage.value = it.ifBlank { null }; settingsOpen.value = true }
+    }
+
     private val scope = kotlinx.coroutines.MainScope()
 
     private fun refreshPalette() {
-        when (Settings.state.value.palette) {
+        val cfg = Settings.state.value
+        when (cfg.palette) {
             "dms" -> palette.value = Palette()
-            "pc" -> {
+            "seed" -> palette.value = runCatching { seedPalette(cfg.paletteSeed) }
+                .onFailure { android.util.Log.w("SidecarLauncher", "seed palette", it) }.getOrDefault(Palette())
+            "pc" -> if (!cfg.pcPaired) palette.value = runCatching { dynamicPalette(this) }.getOrDefault(Palette()) else {
                 palette.value = Palette.load(this) // last palette fetched from the PC
                 scope.launch { PcLink.fetchPalette(this@MainActivity)?.let { palette.value = it } }
             }
@@ -129,7 +160,9 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         settingsOpen.value = false // HOME pressed while on the launcher
+        settingsPage.value = null
         PcLink.importPairing(intent)
+        demo(intent)
     }
 
     override fun onDestroy() {

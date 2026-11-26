@@ -124,6 +124,7 @@ class NowPlayingSource(private val context: Context) {
             else -> pausedAt
         }
         val pkg = c.packageName
+        LastMusic.remember(context, pkg)
         val appName = labels.getOrPut(pkg) {
             runCatching { context.packageManager.run { getApplicationLabel(getApplicationInfo(pkg, 0)).toString() } }.getOrDefault(pkg)
         }
@@ -143,5 +144,30 @@ class NowPlayingSource(private val context: Context) {
             speed = if (ps.playbackSpeed > 0f) ps.playbackSpeed else 1f,
             pausedAtMs = pausedAt,
         )
+    }
+}
+
+/** The last app that had a media session, so the empty player can reopen it. */
+object LastMusic {
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE)
+    private var cached: String? = null
+
+    fun remember(ctx: Context, pkg: String) {
+        if (pkg == cached) return
+        cached = pkg
+        prefs(ctx).edit().putString("lastMusicPkg", pkg).apply()
+    }
+
+    private fun pkg(ctx: Context) = prefs(ctx).getString("lastMusicPkg", null)
+        ?.takeIf { ctx.packageManager.getLaunchIntentForPackage(it) != null }
+
+    fun label(ctx: Context): String? = pkg(ctx)?.let { p ->
+        runCatching { ctx.packageManager.run { getApplicationLabel(getApplicationInfo(p, 0)).toString() } }.getOrNull()
+    }
+
+    fun open(ctx: Context) {
+        val i = pkg(ctx)?.let { ctx.packageManager.getLaunchIntentForPackage(it) }
+            ?: android.content.Intent.makeMainSelectorActivity(android.content.Intent.ACTION_MAIN, android.content.Intent.CATEGORY_APP_MUSIC)
+        runCatching { ctx.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 }

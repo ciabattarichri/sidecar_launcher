@@ -9,7 +9,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 
 data class PhoneNotification(
     val key: String,
+    val pkg: String,
     val app: String,
+    /** Status-bar icon (monochrome mask) of the posting app. */
+    val icon: android.graphics.drawable.Icon?,
     val title: String,
     val text: String,
     val timeMs: Long,
@@ -49,6 +52,8 @@ class PhoneListener : NotificationListenerService() {
                 val e = s.notification.extras
                 PhoneNotification(
                     key = s.key,
+                    pkg = s.packageName,
+                    icon = s.notification.smallIcon,
                     app = labels.getOrPut(s.packageName) {
                         runCatching { pm.getApplicationLabel(pm.getApplicationInfo(s.packageName, PackageManager.ApplicationInfoFlags.of(0))).toString() }
                             .getOrDefault(s.packageName)

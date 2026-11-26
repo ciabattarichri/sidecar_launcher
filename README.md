@@ -6,7 +6,7 @@
 rounded pills, Material 3 colours. No app drawer: widgets, clock and the full app list share one
 screen.
 
-> **Beta (v0.1.x).** Built and tested on a Pixel 8 (Android 17). Other phones work but the layout is
+> **Beta (v0.x).** Built and tested on a Pixel 8 (Android 17), also tried on Pixel 9 and 9a. Other phones work but the layout is
 > tuned for 20:9 screens.
 
 <p align="center">
@@ -14,6 +14,17 @@ screen.
   &nbsp;
   <img src="docs/img/slideshow.jpg" width="300" alt="Full-screen slideshow with clock, weather and now playing">
 </p>
+
+Some of the looks you can pick in the settings:
+
+<p align="center">
+  <img src="docs/img/look-widgets.jpg" width="160" alt="System colours, Google Home widget, clock and app list">
+  <img src="docs/img/look-weather.jpg" width="160" alt="Blue palette, soft dark background, weather widget">
+  <img src="docs/img/look-image.jpg" width="160" alt="No widgets: centred clock on top, background image with translucent cards, notification carousel">
+  <img src="docs/img/look-icons.jpg" width="160" alt="Green palette, icons-only app column, white-on-black notification dots">
+  <img src="docs/img/settings-look.jpg" width="160" alt="Settings: look, with preset and custom palettes">
+</p>
+<p align="center"><sub>System colours · blue palette, soft dark · image background, clock on top · green, icons only · settings</sub></p>
 
 ## Layout
 
@@ -42,21 +53,29 @@ The app list moves to the left in left-handed mode.
 |---|---|---|
 | anywhere | pinch in (two fingers) | launcher settings |
 | anywhere not scrolling | swipe down | notification shade |
+| custom status bar | tap | notification shade |
 | app | tap / long press | open / app info |
 | app | swipe right / left | pin–unpin / hide |
 | "Search apps" | type | search, hidden apps included; Enter opens the first |
 | clock | long press / swipe | Clock app / next page (billable hours) |
-| widgets | double tap | show/hide the player |
+| widgets (or the top half with the clock on top) | double tap, also over lists and buttons | show/hide the player; with no media session, an empty player that opens the last music app |
 | widget | long press | Calendar, Google Home, Weather, notification history; **Photos → full-screen slideshow** with clock, now playing and synced lyrics |
 | Home widget device | tap / long press | toggle / hide |
 
 ## Settings
 
-Grouped in categories: look (side, colours from wallpaper / PC / DMS, background, status and gesture
-bar, icon size, labels, themed icons, language system/IT/EN), animations, widgets & clock pages,
-pinned & hidden apps, calendars, Google Home / weather / Billable Hours, photos (PC folder or
-gallery, album, duration, lyrics), system shortcuts (notification access, default launcher, black
-home wallpaper).
+Grouped in categories: look (side; colours from the system, the PC (when paired) or a palette — 8
+presets or any custom colour, generated with the Material You algorithm so they work on any phone;
+background (black, soft dark or an image, with DMS-style adjustable card and pill transparency);
+custom status bar (battery + notifications as dots or a rolling carousel, theme colours or white on
+black, optional pill) or the system one; gesture bar; app list width, icon size, labels or a centred
+icon column, themed icons; language system/IT/EN), animations, widgets & clock pages (no widget tabs →
+the clock moves to the top: left, centre or right),
+pinned & hidden apps, calendars, Google Home / weather / Billable Hours (only with a Pebble app
+installed), photos (gallery, or the PC folder when paired; album, duration, lyrics), system shortcuts
+(notification access, default launcher, black home wallpaper). Options that depend on another choice
+stay visible but greyed out, with a note. First run (and updates that add options) asks how you want
+the status and gesture bars.
 
 ## With the PC (optional)
 

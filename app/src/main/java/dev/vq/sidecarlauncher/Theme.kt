@@ -98,6 +98,19 @@ data class Palette(
     }
 }
 
+/**
+ * Same palette with see-through surfaces, like DMS's transparency settings: cards ("background") at
+ * [cards], pills inside them ("midground") at [pills]; text, icons and accents stay solid.
+ */
+fun Palette.translucent(cards: Float, pills: Float) = copy(
+    surface = surface.copy(alpha = cards),
+    surfaceContainerLow = surfaceContainerLow.copy(alpha = cards),
+    surfaceContainer = surfaceContainer.copy(alpha = cards),
+    secondaryContainer = secondaryContainer.copy(alpha = cards),
+    surfaceContainerHigh = surfaceContainerHigh.copy(alpha = pills),
+    surfaceContainerHighest = surfaceContainerHighest.copy(alpha = pills),
+)
+
 val LocalPalette = staticCompositionLocalOf { Palette() }
 
 private fun sansFlex(weight: Int) = Font(

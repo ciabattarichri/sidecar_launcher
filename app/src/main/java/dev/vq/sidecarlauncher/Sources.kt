@@ -53,6 +53,36 @@ fun dynamicPalette(context: Context): Palette {
     )
 }
 
+/**
+ * A full dark Material 3 palette from one colour, with the same algorithm Android uses for the
+ * wallpaper (tonal spot; neutral for greys). Works on any phone, Pixel or not.
+ */
+fun seedPalette(seed: Int): Palette {
+    val u = com.google.android.material.color.utilities.Hct.fromInt(seed)
+    @android.annotation.SuppressLint("RestrictedApi")
+    val s = if (u.chroma < 12) com.google.android.material.color.utilities.SchemeNeutral(u, true, 0.0)
+            else com.google.android.material.color.utilities.SchemeTonalSpot(u, true, 0.0)
+    @android.annotation.SuppressLint("RestrictedApi")
+    val m = com.google.android.material.color.utilities.MaterialDynamicColors()
+    @android.annotation.SuppressLint("RestrictedApi")
+    fun c(d: com.google.android.material.color.utilities.DynamicColor) = androidx.compose.ui.graphics.Color(d.getArgb(s))
+    return Palette(
+        surface = c(m.surface()), surfaceContainerLow = c(m.surfaceContainerLow()), surfaceContainer = c(m.surfaceContainer()),
+        surfaceContainerHigh = c(m.surfaceContainerHigh()), surfaceContainerHighest = c(m.surfaceContainerHighest()),
+        onSurface = c(m.onSurface()), onSurfaceVariant = c(m.onSurfaceVariant()),
+        primary = c(m.primary()), onPrimary = c(m.onPrimary()), primaryContainer = c(m.primaryContainer()), onPrimaryContainer = c(m.onPrimaryContainer()),
+        secondary = c(m.secondary()), secondaryContainer = c(m.secondaryContainer()), onSecondaryContainer = c(m.onSecondaryContainer()),
+        tertiary = c(m.tertiary()), tertiaryContainer = c(m.tertiaryContainer()), onTertiaryContainer = c(m.onTertiaryContainer()),
+        outline = c(m.outline()), outlineVariant = c(m.outlineVariant()), error = c(m.error()),
+    )
+}
+
+/** Hue (0–360) → a seed colour of medium chroma, for the custom-colour slider. */
+@android.annotation.SuppressLint("RestrictedApi")
+fun seedFromHue(hue: Float): Int = com.google.android.material.color.utilities.Hct.from(hue.toDouble(), 48.0, 50.0).toInt()
+@android.annotation.SuppressLint("RestrictedApi")
+fun hueOf(seed: Int): Float = com.google.android.material.color.utilities.Hct.fromInt(seed).hue.toFloat()
+
 // ---- Photos (MediaStore) ------------------------------------------------------------------------
 
 object PhotoSource {
@@ -102,7 +132,7 @@ fun PhotoPage(modifier: Modifier, fullscreen: Boolean = false) {
     val cfg by Settings.state.collectAsState()
     val pcVersion by PcLink.photosVersion.collectAsState()
     val items by produceState(emptyList<Any>(), cfg.photoSource, cfg.photoAlbum, pcVersion) {
-        value = if (cfg.photoSource == "pc") withContext(Dispatchers.IO) { PcLink.photos(ctx).shuffled() } else PhotoSource.uris(ctx, cfg.photoAlbum)
+        value = if (cfg.photosFromPc) withContext(Dispatchers.IO) { PcLink.photos(ctx).shuffled() } else PhotoSource.uris(ctx, cfg.photoAlbum)
     }
     var current by remember { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(items, cfg.slideshowSeconds) {
@@ -122,8 +152,8 @@ fun PhotoPage(modifier: Modifier, fullscreen: Boolean = false) {
         if (items.isEmpty()) {
             Text(
                 when {
-                    cfg.photoSource == "pc" && cfg.pcHost.isBlank() -> tr("Collega il PC: phonedash pair-launcher", "Pair the PC: phonedash pair-launcher")
-                    cfg.photoSource == "pc" -> tr("Foto in arrivo dal PC…", "Photos coming from the PC…")
+                    false -> tr("Collega il PC: phonedash pair-launcher", "Pair the PC: phonedash pair-launcher")
+                    cfg.photosFromPc -> tr("Foto in arrivo dal PC…", "Photos coming from the PC…")
                     PhotoSource.allowed(ctx) -> tr("Nessuna foto", "No photos")
                     else -> tr("Permesso foto mancante", "Photo permission missing")
                 },

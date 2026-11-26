@@ -4,6 +4,7 @@ import android.content.Intent
 import android.provider.Settings as AndroidSettings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -26,7 +29,7 @@ import kotlinx.coroutines.launch
 
 /** Full-screen settings (long press on the widgets). Every change is saved immediately. */
 @Composable
-fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit) {
+fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit, initialPage: String? = null) {
     val ctx = LocalContext.current
     val p = LocalPalette.current
     val cfg by Settings.state.collectAsState()
@@ -36,7 +39,13 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit) {
     val albums by produceState(emptyList<String>()) { value = PhotoSource.albums(ctx) }
     fun open(action: String) = runCatching { ctx.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 
-    var page by remember { mutableStateOf<String?>(null) }
+    var page by remember(initialPage) { mutableStateOf(initialPage) }
+    // Background image: Android photo picker (no permission), copied and scaled into the app's files.
+    val wallpaperScope = rememberCoroutineScope()
+    val wallpaperPicker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) wallpaperScope.launch { if (Wallpaper.import(ctx, uri)) Settings.update { it.copy(background = "image") } }
+    }
+    fun pickWallpaper() = wallpaperPicker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
     androidx.activity.compose.BackHandler(enabled = page != null) { page = null }
 
     LazyColumn(
@@ -81,17 +90,39 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit) {
             section(tr("Aspetto", "Look"))
             item { Choice(tr("Lista app", "App list"), listOf(tr("A destra", "Right"), tr("A sinistra", "Left")), if (cfg.leftHanded) 1 else 0) { i -> Settings.update { it.copy(leftHanded = i == 1) } } }
             item {
-                val pals = listOf("dynamic", "pc", "dms")
-                Choice(tr("Colori", "Colours"), listOf(tr("Dallo sfondo", "From wallpaper"), tr("Dal PC (DMS)", "From the PC (DMS)"), tr("DMS predefiniti", "DMS default")),
-                    pals.indexOf(cfg.palette).coerceAtLeast(0)) { i -> Settings.update { it.copy(palette = pals[i]) } }
+                // "From the PC" only when paired with phonedash; built-in DMS amber and seed colours are "Palette".
+                val pals = listOfNotNull("dynamic", "pc".takeIf { cfg.pcPaired }, "palette")
+                val names = listOfNotNull(tr("Dal sistema (sfondo)", "System (wallpaper)"), tr("Dal PC (DMS)", "From the PC (DMS)").takeIf { cfg.pcPaired }, "Palette")
+                val cur = when (cfg.palette) { "dms", "seed" -> "palette"; "pc" -> if (cfg.pcPaired) "pc" else "dynamic"; else -> "dynamic" }
+                Group(tr("Colori", "Colours"), names, pals.indexOf(cur).coerceAtLeast(0),
+                    onSelect = { i -> Settings.update { it.copy(palette = if (pals[i] == "palette") (if (it.palette == "dms") "dms" else "seed") else pals[i]) } },
+                    subEnabled = cur == "palette", disabledNote = tr("Scegli «Palette» per usare questi colori", "Choose «Palette» to use these colours"),
+                ) { PalettePicker(cfg, card = false) }
             }
-            item { Choice(tr("Sfondo", "Background"), listOf(tr("Nero (risparmio)", "Black (saves power)"), tr("Scuro tenue", "Soft dark")), if (cfg.background == "surface") 1 else 0) { i -> Settings.update { it.copy(background = if (i == 1) "surface" else "black") } } }
-            item { Choice(tr("Barra di stato in home", "Status bar on home"), listOf(tr("Fullscreen (solo batteria)", "Fullscreen (battery only)"), "Stock"), if (cfg.statusBar == "visible") 1 else 0) { i -> Settings.update { it.copy(statusBar = if (i == 1) "visible" else "hidden") } } }
-            item { Choice(tr("Barra gesture", "Gesture bar"), listOf(tr("Visibile", "Visible"), tr("Nascosta", "Hidden")), if (cfg.navBar == "hidden") 1 else 0) { i -> Settings.update { it.copy(navBar = if (i == 1) "hidden" else "visible") } } }
+            item {
+                val bgs = listOf("black", "surface", "image")
+                Group(tr("Sfondo", "Background"), listOf(tr("Nero (risparmio)", "Black (saves power)"), tr("Scuro tenue", "Soft dark"), tr("Immagine", "Image")),
+                    bgs.indexOf(cfg.background).coerceAtLeast(0),
+                    onSelect = { i -> if (bgs[i] == "image" && !Wallpaper.exists(ctx)) pickWallpaper() else Settings.update { it.copy(background = bgs[i]) } },
+                    subEnabled = cfg.background == "image", disabledNote = tr("Solo con «Immagine»", "Only with «Image»"),
+                ) { WallpaperSettings(cfg, card = false, onPick = ::pickWallpaper) }
+            }
+            item { StatusBarGroup(cfg) }
+            item { NavBarChoice(cfg) }
             item {
                 val sizes = listOf("normal", "large", "xl")
                 Choice(tr("Icone app", "App icons"), listOf("Normali", tr("Grandi", "Large"), tr("Molto grandi", "Extra large")).let { if (I18n.en) listOf("Normal", "Large", "Extra large") else it },
                     sizes.indexOf(cfg.iconSize).coerceAtLeast(0)) { i -> Settings.update { it.copy(iconSize = sizes[i]) } }
+            }
+            item {
+                val note = if (!cfg.showLabels) tr("Con solo icone la lista resta a metà", "With icons only the list stays half width")
+                    else tr("Vale quando accanto alla lista non c'è niente", "Applies when nothing sits beside the list")
+                val topless = cfg.tabs.isEmpty()
+                val billableSide = "billable" in cfg.clockPages && Pebble.billableAvailable(ctx, cfg)
+                Dimmed(cfg.showLabels && topless && !billableSide, note) {
+                    Choice(tr("Larghezza lista app", "App list width"), listOf(tr("Metà", "Half"), tr("Tutta la larghezza", "Full width")),
+                        if (cfg.appListWidth == "full" && cfg.showLabels) 1 else 0) { i -> Settings.update { it.copy(appListWidth = if (i == 1) "full" else "half") } }
+                }
             }
             item { Choice(tr("Nomi delle app", "App names"), listOf(tr("Mostra", "Show"), tr("Solo icone", "Icons only")), if (cfg.showLabels) 0 else 1) { i -> Settings.update { it.copy(showLabels = i == 0) } } }
             item { Choice(tr("Icone a tema", "Themed icons"), listOf("Off", "On"), if (cfg.themedIcons) 1 else 0) { i -> Settings.update { it.copy(themedIcons = i == 1) } } }
@@ -116,8 +147,16 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit) {
             section(tr("Widget in alto", "Top widgets"))
             orderedList(cfg.tabs, LauncherConfig.ALL_TABS, ::tabName) { Settings.update { c -> c.copy(tabs = it) } }
 
+            item {
+                val aligns = listOf("start", "center", "end")
+                Dimmed(cfg.tabs.isEmpty(), tr("Solo senza widget in alto: l'orologio prende il loro posto", "Only with no top widgets: the clock takes their place")) {
+                    Choice(tr("Orologio in alto", "Clock at the top"), listOf(tr("A sinistra", "Left"), tr("Al centro", "Centre"), tr("A destra", "Right")),
+                        aligns.indexOf(cfg.topClockAlign).coerceAtLeast(0)) { i -> Settings.update { it.copy(topClockAlign = aligns[i]) } }
+                }
+            }
+
             section(tr("Pagine sotto l'orologio (scorrevoli)", "Clock pages (swipe)"))
-            orderedList(cfg.clockPages, LauncherConfig.ALL_CLOCK_PAGES, ::clockPageName) { Settings.update { c -> c.copy(clockPages = it.ifEmpty { listOf("clock") }) } }
+            orderedList(cfg.clockPages, LauncherConfig.ALL_CLOCK_PAGES.filter { it != "billable" || Pebble.billableAvailable(ctx, cfg) }, ::clockPageName) { Settings.update { c -> c.copy(clockPages = it.ifEmpty { listOf("clock") }) } }
 
         }
         if (page == "apps") {
@@ -164,7 +203,10 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit) {
             section(tr("Meteo", "Weather"))
             item { Field(tr("Città (vuoto = posizione)", "City (blank = location)"), cfg.city) { v -> Settings.update { it.copy(city = v.trim()) } } }
 
+            if (Pebble.billableAvailable(ctx, cfg)) {
             section("Billable Hours")
+            item { Hint(tr("Ore lavorate registrate con la watchapp Pebble «Billable Hours»: incolla l'URL e la parola segreta del suo backup web per vederle sotto l'orologio.",
+                "Hours tracked with the «Billable Hours» Pebble watchapp: paste its web backup URL and secret word to see them under the clock.")) }
             item { Field(tr("URL web app backup", "Backup web app URL"), cfg.billableUrl) { v -> Settings.update { it.copy(billableUrl = v.trim()) } } }
             item { Field(tr("Parola segreta", "Secret word"), cfg.billableToken, secret = true) { v -> Settings.update { it.copy(billableToken = v.trim()) } } }
             item {
@@ -174,19 +216,22 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit) {
                     scope.launch { Billable.refresh(cfg.billableUrl, cfg.billableToken) }
                 }
             }
+            }
 
         }
         if (page == "photos") {
             section(tr("Foto", "Photos"))
-            item { Choice(tr("Origine", "Source"), listOf(tr("Cartella del PC", "PC folder"), tr("Galleria del telefono", "Phone gallery")), if (cfg.photoSource == "phone") 1 else 0) { i -> Settings.update { it.copy(photoSource = if (i == 1) "phone" else "pc") } } }
-            item {
-                val scope = rememberCoroutineScope()
-                if (cfg.pcHost.isBlank()) Hint(tr("PC non collegato: telefono via USB, poi sul PC `phonedash pair-launcher`.", "PC not paired: phone on USB, then `phonedash pair-launcher` on the PC."))
-                else RowAction("PC: ${cfg.pcHost.substringBefore(",")}", tr("Sincronizza ora", "Sync now")) { scope.launch { PcLink.syncPhotos(ctx, force = true) } }
+            // PC folder (phonedash) only when paired; otherwise the gallery, without mentioning the PC.
+            if (cfg.pcPaired) {
+                item { Choice(tr("Origine", "Source"), listOf(tr("Cartella del PC", "PC folder"), tr("Galleria del telefono", "Phone gallery")), if (cfg.photoSource == "phone") 1 else 0) { i -> Settings.update { it.copy(photoSource = if (i == 1) "phone" else "pc") } } }
+                item {
+                    val scope = rememberCoroutineScope()
+                    RowAction("PC: ${cfg.pcHost.substringBefore(",")}", tr("Sincronizza ora", "Sync now")) { scope.launch { PcLink.syncPhotos(ctx, force = true) } }
+                }
             }
-            if (cfg.photoSource == "phone" && !PhotoSource.allowed(ctx)) item { RowAction(tr("Accesso alle foto", "Photo access"), tr("Consenti", "Allow"), highlighted = true) { requestPhotos() } }
+            if (!cfg.photosFromPc && !PhotoSource.allowed(ctx)) item { RowAction(tr("Accesso alle foto", "Photo access"), tr("Consenti", "Allow"), highlighted = true) { requestPhotos() } }
             item {
-                if (cfg.photoSource == "phone") Choice(tr("Album", "Album"), listOf(tr("Tutte", "All")) + albums, (albums.indexOf(cfg.photoAlbum) + 1).coerceAtLeast(0)) { i ->
+                if (!cfg.photosFromPc) Choice(tr("Album", "Album"), listOf(tr("Tutte", "All")) + albums, (albums.indexOf(cfg.photoAlbum) + 1).coerceAtLeast(0)) { i ->
                     Settings.update { it.copy(photoAlbum = if (i == 0) "" else albums[i - 1]) }
                 }
             }
@@ -281,9 +326,9 @@ private fun IconBtn(sym: Char, enabled: Boolean, onClick: () -> Unit) {
 private fun Hint(text: String) = Text(text, style = textStyle(14, LocalPalette.current.onSurfaceVariant, 400), modifier = Modifier.padding(start = 4.dp))
 
 @Composable
-private fun Choice(label: String, options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+private fun Choice(label: String, options: List<String>, selected: Int, card: Boolean = true, onSelect: (Int) -> Unit) {
     val p = LocalPalette.current
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(p.surfaceContainer).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth().then(cardModifier(card)), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(label, style = textStyle(15, p.onSurface, 500))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             options.forEachIndexed { i, o ->
@@ -294,6 +339,92 @@ private fun Choice(label: String, options: List<String>, selected: Int, onSelect
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun cardModifier(card: Boolean) =
+    if (card) Modifier.clip(RoundedCornerShape(20.dp)).background(LocalPalette.current.surfaceContainer).padding(12.dp) else Modifier
+
+/**
+ * A main choice with its sub-options in the same card. The sub-options are always shown (so you can see
+ * what the launcher can do) but greyed out and inert when the main choice doesn't use them, with a note why.
+ */
+@Composable
+private fun Group(label: String, options: List<String>, selected: Int, onSelect: (Int) -> Unit, subEnabled: Boolean, disabledNote: String, sub: @Composable ColumnScope.() -> Unit) {
+    val p = LocalPalette.current
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(p.surfaceContainer).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Choice(label, options, selected, card = false, onSelect = onSelect)
+        Box(Modifier.fillMaxWidth().height(1.dp).background(p.outlineVariant.copy(alpha = 0.5f)))
+        Box {
+            Column(Modifier.padding(start = 12.dp).alpha(if (subEnabled) 1f else 0.38f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (!subEnabled) Text(disabledNote, style = textStyle(13, p.onSurfaceVariant, 500))
+                sub()
+            }
+            // Greyed out: swallow every touch so nothing underneath reacts.
+            if (!subEnabled) Box(Modifier.matchParentSize().pointerInput(Unit) {
+                awaitPointerEventScope { while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial).changes.forEach { it.consume() } }
+            })
+        }
+    }
+}
+
+/** Shows [content] greyed out and inert (with [note] above it) when not [enabled]. */
+@Composable
+private fun Dimmed(enabled: Boolean, note: String, content: @Composable () -> Unit) {
+    Box {
+        Column(Modifier.alpha(if (enabled) 1f else 0.38f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (!enabled) Hint(note)
+            content()
+        }
+        if (!enabled) Box(Modifier.matchParentSize().pointerInput(Unit) {
+            awaitPointerEventScope { while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial).changes.forEach { it.consume() } }
+        })
+    }
+}
+
+/** Background image (preview + "Change") and how see-through the widgets over it are (DMS-style). */
+@Composable
+private fun WallpaperSettings(cfg: LauncherConfig, card: Boolean = true, onPick: () -> Unit) {
+    val p = LocalPalette.current
+    // Sliders move locally (live preview); saved when released (one write instead of one per frame).
+    var cards by remember(cfg.cardOpacity) { mutableFloatStateOf(cfg.cardOpacity.toFloat()) }
+    var pills by remember(cfg.pillOpacity) { mutableFloatStateOf(cfg.pillOpacity.toFloat()) }
+    Column(Modifier.fillMaxWidth().then(cardModifier(card)), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Mini home: image, a card and a pill at the chosen opacities.
+            Box(Modifier.size(64.dp, 140.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black)) {
+                WallpaperImage(modifier = Modifier.fillMaxSize())
+                Column(Modifier.fillMaxSize().padding(5.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(8.dp)).background(p.surfaceContainer.copy(alpha = cards / 100f)).padding(5.dp)) {
+                        Box(Modifier.fillMaxWidth().height(12.dp).clip(CircleShape).background(p.surfaceContainerHigh.copy(alpha = pills / 100f)))
+                    }
+                    Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(8.dp)).background(p.surfaceContainer.copy(alpha = cards / 100f)).padding(5.dp)) {
+                        Box(Modifier.width(24.dp).height(5.dp).clip(CircleShape).background(p.onSurface))
+                    }
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(tr("Immagine di sfondo", "Background image"), style = textStyle(15, p.onSurface, 500))
+                Pill(Modifier.clickable(onClick = onPick), background = p.surfaceContainerHigh, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp)) {
+                    Text(tr("Cambia", "Change"), style = textStyle(13, p.onSurface, 600))
+                }
+            }
+        }
+        @Composable
+        fun slider(label: String, value: Float, onChange: (Float) -> Unit, onDone: () -> Unit) {
+            Text("$label ${value.toInt()}%", style = textStyle(14, p.onSurfaceVariant, 500))
+            androidx.compose.material3.Slider(
+                value = value, onValueChange = onChange, valueRange = 0f..100f, steps = 19, onValueChangeFinished = onDone,
+                colors = androidx.compose.material3.SliderDefaults.colors(
+                    thumbColor = p.primary, activeTrackColor = p.primary, inactiveTrackColor = p.surfaceContainerHighest,
+                    activeTickColor = p.onPrimary, inactiveTickColor = p.onSurfaceVariant,
+                ),
+            )
+        }
+        slider(tr("Opacità riquadri", "Card opacity"), cards, { cards = it }) { Settings.update { it.copy(cardOpacity = cards.toInt()) } }
+        slider(tr("Opacità pulsanti e pillole", "Button and pill opacity"), pills, { pills = it }) { Settings.update { it.copy(pillOpacity = pills.toInt()) } }
+        Hint(tr("Testi e icone restano sempre pieni.", "Text and icons always stay solid."))
     }
 }
 
@@ -322,6 +453,111 @@ private fun Field(label: String, value: String, secret: Boolean = false, onChang
             visualTransformation = if (secret) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         )
+    }
+}
+
+/** Status bar on the home, with the custom bar's options nested under it. */
+@Composable
+private fun StatusBarGroup(cfg: LauncherConfig) {
+    val custom = cfg.statusBar == "hidden"
+    Group(
+        tr("Barra di stato in home", "Status bar on home"), listOf(tr("Personalizzata", "Custom"), tr("Di sistema", "System")), if (custom) 0 else 1,
+        onSelect = { i -> Settings.update { it.copy(statusBar = if (i == 1) "visible" else "hidden") } },
+        subEnabled = custom, disabledNote = tr("Solo con la barra personalizzata", "Only with the custom bar"),
+    ) {
+        Hint(tr("Batteria a destra e, se vuoi, le notifiche a sinistra. Tocca la barra per aprire la tendina.",
+            "Battery on the right and, if you like, notifications on the left. Tap the bar to open the shade."))
+        val modes = listOf("off", "dots", "carousel")
+        Choice(tr("Notifiche", "Notifications"), listOf("Off", tr("Pallini", "Dots"), tr("Carosello (icona + app)", "Carousel (icon + app)")),
+            modes.indexOf(cfg.statusNotifs).coerceAtLeast(0), card = false) { i -> Settings.update { it.copy(statusNotifs = modes[i]) } }
+        Choice(tr("Colori", "Colours"), listOf(tr("Del tema", "Theme"), tr("Bianco su nero", "White on black")),
+            if (cfg.statusStyle == "mono") 1 else 0, card = false) { i -> Settings.update { it.copy(statusStyle = if (i == 1) "mono" else "theme") } }
+        Choice(tr("Sfondo", "Background"), listOf(tr("Nessuno", "None"), tr("Pillola (più leggibile su immagini chiare)", "Pill (easier to read on bright images)")),
+            if (cfg.statusPill) 1 else 0, card = false) { i -> Settings.update { it.copy(statusPill = i == 1) } }
+    }
+}
+
+private val PRESETS = listOf(
+    0 to ("Ambra (DMS)" to "Amber (DMS)"), // built-in hand-made palette
+    0xFF3F6FD8.toInt() to ("Blu" to "Blue"),
+    0xFF1E9AA0.toInt() to ("Turchese" to "Teal"),
+    0xFF3E9B5B.toInt() to ("Verde" to "Green"),
+    0xFF7E57C2.toInt() to ("Viola" to "Purple"),
+    0xFFD8578A.toInt() to ("Rosa" to "Pink"),
+    0xFFD04A3A.toInt() to ("Rosso" to "Red"),
+    0xFF808890.toInt() to ("Neutro" to "Neutral"),
+)
+
+/** Preset swatches + custom hue slider / hex code, all generated with the Material You algorithm. */
+@Composable
+private fun PalettePicker(cfg: LauncherConfig, card: Boolean = true) {
+    val p = LocalPalette.current
+    val presetSeeds = PRESETS.map { it.first }
+    val custom = cfg.palette == "seed" && cfg.paletteSeed !in presetSeeds
+    var hue by remember(cfg.paletteSeed) { mutableFloatStateOf(hueOf(cfg.paletteSeed)) }
+    Column(Modifier.fillMaxWidth().then(cardModifier(card)), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(tr("Palette predefinite", "Preset palettes"), style = textStyle(15, p.onSurface, 500))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            PRESETS.forEach { (seed, names) ->
+                val on = if (seed == 0) cfg.palette == "dms" else cfg.palette == "seed" && cfg.paletteSeed == seed
+                val swatch = remember(seed) { if (seed == 0) Palette() else seedPalette(seed) }
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).background(if (on) p.onSurface else Color.Transparent).padding(3.dp)
+                        .clip(CircleShape).background(swatch.primaryContainer)
+                        .clickable { Settings.update { it.copy(palette = if (seed == 0) "dms" else "seed", paletteSeed = if (seed == 0) it.paletteSeed else seed) } },
+                    contentAlignment = Alignment.Center,
+                ) { Box(Modifier.size(16.dp).clip(CircleShape).background(swatch.primary)) }
+            }
+        }
+        Text(PRESETS.firstOrNull { (seed, _) -> if (seed == 0) cfg.palette == "dms" else cfg.palette == "seed" && cfg.paletteSeed == seed }
+            ?.second?.let { tr(it.first, it.second) } ?: tr("Personalizzato", "Custom"), style = textStyle(13, p.onSurfaceVariant, 500))
+        Text(tr("Colore personalizzato", "Custom colour"), style = textStyle(15, p.onSurface, 500))
+        // Rainbow track: drag to pick the hue; saved when released.
+        Box(Modifier.fillMaxWidth().height(10.dp).clip(CircleShape).background(androidx.compose.ui.graphics.Brush.horizontalGradient(
+            (0..12).map { androidx.compose.ui.graphics.Color(seedFromHue(it * 30f)) })))
+        androidx.compose.material3.Slider(
+            value = hue, onValueChange = { hue = it }, valueRange = 0f..360f,
+            onValueChangeFinished = { Settings.update { it.copy(palette = "seed", paletteSeed = seedFromHue(hue)) } },
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = androidx.compose.ui.graphics.Color(seedFromHue(hue)), activeTrackColor = Color.Transparent, inactiveTrackColor = Color.Transparent,
+            ),
+        )
+        val hex = "#%06X".format(cfg.paletteSeed and 0xFFFFFF)
+        Field(tr("Codice colore (es. #3F6FD8)", "Colour code (e.g. #3F6FD8)"), if (custom || cfg.palette == "seed") hex else "") { v ->
+            val t = v.trim().removePrefix("#")
+            if (t.length == 6) t.toLongOrNull(16)?.let { c -> Settings.update { it.copy(palette = "seed", paletteSeed = (0xFF000000 or c).toInt()) } }
+        }
+    }
+}
+
+@Composable
+private fun NavBarChoice(cfg: LauncherConfig) =
+    Choice(tr("Barra gesture", "Gesture bar"), listOf(tr("Visibile", "Visible"), tr("Nascosta", "Hidden")),
+        if (cfg.navBar == "hidden") 1 else 0) { i -> Settings.update { it.copy(navBar = if (i == 1) "hidden" else "visible") } }
+
+/** First run (or an update that adds questions): status bar, notifications and gesture bar. Changes apply live. */
+@Composable
+fun SetupPrompt() {
+    val p = LocalPalette.current
+    val cfg by Settings.state.collectAsState()
+    if (cfg.setupVersion >= LauncherConfig.SETUP_VERSION) return
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)).clickable(remember { MutableInteractionSource() }, indication = null) {},
+        contentAlignment = Alignment.Center) {
+        Column(Modifier.padding(20.dp).clip(RoundedCornerShape(28.dp)).background(p.surfaceContainerHigh)
+                .verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(tr("Benvenuto", "Welcome"), style = textStyle(22, p.onSurface, 700))
+            Text(tr("Scegli come vuoi le barre di sistema. Puoi cambiarlo quando vuoi in Impostazioni → Aspetto (pizzico con due dita).",
+                "Choose how you want the system bars. You can change this any time in Settings → Look (two-finger pinch)."),
+                style = textStyle(14, p.onSurfaceVariant, 400))
+            StatusBarGroup(cfg)
+            NavBarChoice(cfg)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Pill(Modifier.clickable { Settings.update { it.copy(setupVersion = LauncherConfig.SETUP_VERSION) } }, background = p.primary) {
+                    Text(tr("Fatto", "Done"), style = textStyle(15, p.onPrimary, 600))
+                }
+            }
+        }
     }
 }
 

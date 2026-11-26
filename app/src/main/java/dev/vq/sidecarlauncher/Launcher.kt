@@ -5,6 +5,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -49,6 +50,8 @@ import java.time.temporal.ChronoUnit
 import kotlin.math.roundToInt
 
 private const val PAUSED_HIDE_MS = 5_000L
+/** How long a double-tapped player stays up with nothing playing. */
+private const val PLAYER_SHOWN_MS = 20_000L
 
 private fun Int.sp() = androidx.compose.ui.unit.TextUnit(toFloat(), androidx.compose.ui.unit.TextUnitType.Sp)
 
@@ -103,18 +106,34 @@ fun LauncherScreen(nowPlaying: NowPlayingSource, onSettings: () -> Unit) {
     val shownTrack = visibleTrack ?: track?.takeIf { playerShown }
     var lastShown by remember { mutableStateOf<NowPlaying?>(null) }
     if (shownTrack != null) lastShown = shownTrack
+    // Shown by double tap: once music plays the normal rules take over; with nothing playing it
+    // goes away by itself after PLAYER_SHOWN_MS (the double tap is a peek, not a pin).
+    LaunchedEffect(playerShown, track?.playing, lastTouch) {
+        if (!playerShown) return@LaunchedEffect
+        if (track?.playing == true) { playerShown = false; return@LaunchedEffect }
+        delay(PLAYER_SHOWN_MS)
+        playerShown = false
+    }
+    // Double tap with no media session at all: an empty player that opens the last music app.
+    val showEmpty = playerShown && track == null
+    var emptyMode by remember { mutableStateOf(false) }
+    if (shownTrack != null) emptyMode = false else if (showEmpty) emptyMode = true
     var fullscreenPhotos by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf(false) }
     val pcPhotos by PcLink.photosVersion.collectAsState()
-    WhileResumed(cfg.photoSource, cfg.pcHost, cfg.pcToken, pcPhotos == 0, periodMs = 10 * 60_000L) { if (cfg.photoSource == "pc") PcLink.syncPhotos(ctx) }
+    WhileResumed(cfg.photoSource, cfg.pcHost, cfg.pcToken, pcPhotos == 0, periodMs = 10 * 60_000L) { if (cfg.photosFromPc) PcLink.syncPhotos(ctx) }
 
     Box(Modifier.fillMaxSize().background(if (cfg.background == "surface") p.surface else Color.Black)) {
+    if (cfg.background == "image") WallpaperImage()
     Column(
         Modifier.fillMaxSize().onPinchIn(onSettings).onSwipeDown { Intents.notificationShade(ctx) }.stableBarsPadding(cfg).imePadding().padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         // With the system status bar hidden, keep just the battery (top-right), no clock / notification icons.
-        if (cfg.statusBar == "hidden") BatteryLine()
+        if (cfg.statusBar == "hidden") StatusLine(cfg.statusNotifs, cfg.statusStyle == "mono", cfg.statusPill, onTap = { Intents.notificationShade(ctx) })
+        // No widget tabs: the clock moves to the top, horizontal like desk_sidecar.
+        val topless = cfg.tabs.isEmpty()
+        val togglePlayer = { playerShown = !(playerShown || visibleTrack != null) }
         // ---- Top half: widgets (+ player when something plays) --------------------------------------
         // While searching apps the widgets smoothly fold away (weight → 0 + fade), so results fill the
         // space above the keyboard without a jump.
@@ -123,33 +142,52 @@ fun LauncherScreen(nowPlaying: NowPlayingSource, onSettings: () -> Unit) {
             androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.FastOutSlowInEasing),
             label = "widgets",
         )
+        @Composable
+        fun ColumnScope.Player() = AnimatedVisibility(
+                shownTrack != null || showEmpty,
+                enter = fadeIn(androidx.compose.animation.core.tween(350)) + expandVertically(androidx.compose.animation.core.tween(350)),
+                exit = fadeOut(androidx.compose.animation.core.tween(300)) + shrinkVertically(androidx.compose.animation.core.tween(350)),
+            ) {
+                val t = shownTrack ?: lastShown
+                if (emptyMode || t == null) EmptyPlayer(onOpen = { playerShown = false }) else MediaCard(t, nowPlaying, lastTouch)
+            }
+        // The top half stays the top half (the app list keeps the bottom one, for one-hand use).
         if (topWeight > 0.001f) Column(
             Modifier.weight(topWeight).fillMaxWidth().clipToBounds().graphicsLayer { alpha = topWeight },
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (topless) {
+                // Double tap anywhere above the player (clock, pills or empty space) shows/hides it.
+                Column(Modifier.weight(1f).fillMaxWidth().onDoubleTapAnywhere(togglePlayer)) {
+                    TopClock(now, weather, cfg.topClockAlign)
+                }
+                Player()
+            } else {
             WidgetCard(
                 agenda, weather, onSettings,
-                onDoubleTap = { playerShown = !(playerShown || visibleTrack != null) },
                 onPhotos = { fullscreenPhotos = true },
-                Modifier.weight(1f).pointerInput(Unit) {
+                // Double tap anywhere on the widgets, even over lists and buttons, shows/hides the player.
+                Modifier.weight(1f).onDoubleTapAnywhere(togglePlayer).pointerInput(Unit) {
                     detectTapGestures(onPress = { lastTouch = System.currentTimeMillis() })
                 },
             )
-            AnimatedVisibility(
-                shownTrack != null,
-                enter = fadeIn(androidx.compose.animation.core.tween(350)) + expandVertically(androidx.compose.animation.core.tween(350)),
-                exit = fadeOut(androidx.compose.animation.core.tween(300)) + shrinkVertically(androidx.compose.animation.core.tween(350)),
-            ) {
-                (shownTrack ?: lastShown)?.let { MediaCard(it, nowPlaying, lastTouch) }
+            Player()
             }
         }
         // ---- Bottom half: clock pager + app list -------------------------------------------------------
-        Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // With the clock on top the side column keeps only the other pages (billable); none → full-width list.
+        val snap by Billable.snapshot.collectAsState()
+        val side = !topless || ("billable" in cfg.clockPages && snap != null)
+        val fullList = !side && cfg.appListWidth == "full" && cfg.showLabels
+        if (fullList) Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            AppList(Modifier.weight(1f).fillMaxWidth()) { searching = it }
+            SearchBar()
+        } else Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (cfg.leftHanded) {
                 AppList(Modifier.weight(0.56f).fillMaxHeight()) { searching = it }
-                ClockPager(now, onSettings, Modifier.weight(0.44f).fillMaxHeight())
+                SideColumn(side, now, onSettings, Modifier.weight(0.44f).fillMaxHeight(), withClock = !topless)
             } else {
-                ClockPager(now, onSettings, Modifier.weight(0.44f).fillMaxHeight())
+                SideColumn(side, now, onSettings, Modifier.weight(0.44f).fillMaxHeight(), withClock = !topless)
                 AppList(Modifier.weight(0.56f).fillMaxHeight()) { searching = it }
             }
         }
@@ -176,7 +214,7 @@ private val TAB_INFO = mapOf(
 )
 
 @Composable
-private fun WidgetCard(agenda: List<CalEvent>, weather: Weather?, onSettings: () -> Unit, onDoubleTap: () -> Unit, onPhotos: () -> Unit, modifier: Modifier) {
+private fun WidgetCard(agenda: List<CalEvent>, weather: Weather?, onSettings: () -> Unit, onPhotos: () -> Unit, modifier: Modifier) {
     val p = LocalPalette.current
     val cfg by Settings.state.collectAsState()
     val tabs = cfg.tabs
@@ -214,7 +252,6 @@ private fun WidgetCard(agenda: List<CalEvent>, weather: Weather?, onSettings: ()
             val longPress = Modifier.pointerInput(key) {
                 detectTapGestures(
                     onLongPress = { if (key == "photos") onPhotos() else key?.let { Intents.openFor(ctx, it) } },
-                    onDoubleTap = { onDoubleTap() },
                 )
             }
             val m = Modifier.fillMaxSize().then(longPress).padding(12.dp)
@@ -236,11 +273,11 @@ private val MIN_FMT = DateTimeFormatter.ofPattern("mm")
 private val SHORT_DATE get() = DateTimeFormatter.ofPattern(if (I18n.en) "EEE, MMM d" else "EEE d MMM", I18n.locale)
 
 @Composable
-private fun ClockPager(now: LocalDateTime, onSettings: () -> Unit, modifier: Modifier) {
+private fun ClockPager(now: LocalDateTime, onSettings: () -> Unit, modifier: Modifier, withClock: Boolean = true) {
     val p = LocalPalette.current
     val cfg by Settings.state.collectAsState()
     val snap by Billable.snapshot.collectAsState()
-    val pages = cfg.clockPages.filter { it != "billable" || snap != null }.ifEmpty { listOf("clock") }
+    val pages = cfg.clockPages.filter { (it != "billable" || snap != null) && (withClock || it != "clock") }.ifEmpty { listOf("clock") }
     val count = if (pages.size > 1) 10_000 else 1
     val pager = rememberPagerState(initialPage = if (count > 1) 5_000 - 5_000 % pages.size else 0) { count }
     Column(modifier) {
@@ -277,6 +314,46 @@ private fun ClockPage(now: LocalDateTime, onSettings: () -> Unit) {
             MIcon(Sym.CALENDAR, 18.dp, p.primary)
             Text(now.format(SHORT_DATE).split(" ").joinToString(" ") { s -> s.replaceFirstChar { it.uppercase() } }.replace(".", ""),
                 style = textStyle(15, p.onSurface), maxLines = 1)
+        }
+    }
+}
+
+/** Beside the app list: the clock pager, or (clock on top, nothing to page) just Google search + camera at the bottom. */
+@Composable
+private fun SideColumn(pages: Boolean, now: LocalDateTime, onSettings: () -> Unit, modifier: Modifier, withClock: Boolean) {
+    if (pages) ClockPager(now, onSettings, modifier, withClock)
+    else Column(modifier, verticalArrangement = Arrangement.Bottom) { SearchBar() }
+}
+
+/** Horizontal clock + date/weather pills at the top, used when every widget tab is turned off. */
+@Composable
+private fun TopClock(now: LocalDateTime, weather: Weather?, align: String) {
+    val p = LocalPalette.current
+    val ctx = LocalContext.current
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(top = 8.dp)
+            .pointerInput(Unit) { detectTapGestures(onLongPress = { Intents.clock(ctx) }) },
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalAlignment = when (align) { "center" -> Alignment.CenterHorizontally; "end" -> Alignment.End; else -> Alignment.Start },
+    ) {
+        Row(Modifier.cropVertical(24.dp, 22.dp)) {
+            Text(now.format(HOUR_FMT) + ":", style = textStyle(108, p.onSurface, 800).copy(fontFamily = ClockFont), maxLines = 1, softWrap = false)
+            Text(now.format(MIN_FMT), style = textStyle(108, p.primary, 800).copy(fontFamily = ClockFont), maxLines = 1, softWrap = false)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Pill {
+                MIcon(Sym.CALENDAR, 18.dp, p.primary)
+                Text(now.format(SHORT_DATE).split(" ").joinToString(" ") { s -> s.replaceFirstChar { it.uppercase() } }.replace(".", ""),
+                    style = textStyle(15, p.onSurface), maxLines = 1)
+            }
+            weather?.let { w ->
+                val (icon, label) = WeatherRepo.describe(w.code, w.isDay)
+                Pill(Modifier.weight(1f, fill = false)) {
+                    MIcon(icon, 18.dp, p.primary, filled = true)
+                    Text("${w.temperature.roundToInt()}°", style = textStyle(15, p.onSurface, 600), maxLines = 1)
+                    Text(label, style = textStyle(15, p.onSurfaceVariant), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
         }
     }
 }
@@ -364,19 +441,15 @@ private fun AppListBody(modifier: Modifier, cfg: LauncherConfig, pinned: List<Ap
     val p = LocalPalette.current
     val box = modifier
     if (!cfg.showLabels) {
-        // Icons only: a grid, pinned first.
-        val size = iconDp(cfg)
-        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-            androidx.compose.foundation.lazy.grid.GridCells.Adaptive(size + 22.dp), box, contentPadding = PaddingValues(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            if (pinned.isNotEmpty()) item("pinned", span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                FlowRow(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(p.surfaceContainerHigh).padding(4.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                ) { pinned.forEach { key(it.key) { Box(Modifier.width(size + 22.dp)) { AppRow(it, pinned = true, iconOnly = true) } } } }
+        // Icons only: one centred column (thumb-friendly), pinned first in their own pill.
+        LazyColumn(box, contentPadding = PaddingValues(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            // Full-width rows with the icon centred: the whole row is the touch/swipe target.
+            if (pinned.isNotEmpty()) item("pinned") {
+                Column(Modifier.fillMaxWidth().padding(bottom = 6.dp).clip(RoundedCornerShape(22.dp)).background(p.surfaceContainerHigh).padding(vertical = 2.dp)) {
+                    pinned.forEach { key(it.key) { AppRow(it, pinned = true, iconOnly = true) } }
+                }
             }
-            items(rest.size, key = { rest[it].key }) { AppRow(rest[it], pinned = false, iconOnly = true, dim = dimHidden && rest[it].key in cfg.hidden) }
+            items(rest, key = { it.key }) { AppRow(it, pinned = false, iconOnly = true, dim = dimHidden && it.key in cfg.hidden) }
         }
         return
     }
@@ -443,6 +516,55 @@ private fun AppRow(app: AppEntry, pinned: Boolean, iconOnly: Boolean = false, di
                 Spacer(Modifier.width(12.dp))
                 Text(app.label, style = textStyle(if (cfg.iconSize == "normal") 16 else 17, p.onSurface, if (pinned) 600 else 400), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             }
+        }
+    }
+}
+
+/**
+ * Double tap that works over anything (lists, buttons): watched in the Initial pass without consuming,
+ * so children still get their taps. Fires on the second release; moves, long presses and multi-touch don't count.
+ */
+private fun Modifier.onDoubleTapAnywhere(action: () -> Unit) = pointerInput(Unit) {
+    val slop = viewConfiguration.touchSlop
+    val timeout = viewConfiguration.doubleTapTimeoutMillis
+    val longPress = viewConfiguration.longPressTimeoutMillis
+    var lastUp = 0L
+    var lastPos = androidx.compose.ui.geometry.Offset.Zero
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+        val second = lastUp != 0L && down.uptimeMillis - lastUp <= timeout && (down.position - lastPos).getDistance() < slop * 6
+        var moved = false
+        var multi = false
+        var up: androidx.compose.ui.input.pointer.PointerInputChange? = null
+        while (true) {
+            val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+            if (e.changes.count { it.pressed } > 1) multi = true
+            val c = e.changes.firstOrNull { it.id == down.id } ?: break
+            if ((c.position - down.position).getDistance() > slop) moved = true
+            if (!c.pressed) { up = c; break }
+        }
+        val u = up
+        if (u == null || moved || multi || u.uptimeMillis - down.uptimeMillis >= longPress) { lastUp = 0L; return@awaitEachGesture }
+        if (second) { lastUp = 0L; action() } else { lastUp = u.uptimeMillis; lastPos = u.position }
+    }
+}
+
+/** Player placeholder when nothing has a media session: open the last music app (or the default one). */
+@Composable
+private fun EmptyPlayer(onOpen: () -> Unit) {
+    val p = LocalPalette.current
+    val ctx = LocalContext.current
+    val app = remember { LastMusic.label(ctx) }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(p.surfaceContainer).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.size(48.dp).clip(CircleShape).background(p.surfaceContainerHigh), contentAlignment = Alignment.Center) {
+            MIcon(Sym.MUSIC_NOTE, 24.dp, p.primary, filled = true)
+        }
+        Text(tr("Niente in riproduzione", "Nothing playing"), style = textStyle(16, p.onSurface, 600), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Pill(Modifier.clickable { LastMusic.open(ctx); onOpen() }, background = p.primaryContainer, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+            Text(app?.let { tr("Apri $it", "Open $it") } ?: tr("Apri musica", "Open music"), style = textStyle(14, p.onPrimaryContainer, 600), maxLines = 1)
         }
     }
 }
@@ -542,9 +664,15 @@ private fun Modifier.cropVertical(top: androidx.compose.ui.unit.Dp, bottom: andr
     layout(pl.width, (pl.height - t - b).coerceAtLeast(0)) { pl.place(0, -t) }
 }
 
-/** Battery level from the sticky ACTION_BATTERY_CHANGED broadcast: event-driven, no polling. */
+/** One app's notifications, for the custom status bar. */
+private data class NotifGroup(val pkg: String, val app: String, val icon: android.graphics.drawable.Icon?, val count: Int)
+
+/**
+ * Custom status bar (system one hidden): notifications on the left ([mode]: off / dots / carousel), battery
+ * on the right. Battery from the sticky ACTION_BATTERY_CHANGED broadcast: event-driven, no polling.
+ */
 @Composable
-private fun BatteryLine() {
+private fun StatusLine(mode: String, mono: Boolean, pill: Boolean, onTap: () -> Unit) {
     val p = LocalPalette.current
     val ctx = LocalContext.current
     var level by remember { mutableIntStateOf(-1) }
@@ -562,13 +690,93 @@ private fun BatteryLine() {
         sticky?.let { r.onReceive(ctx, it) }
         onDispose { ctx.unregisterReceiver(r) }
     }
-    if (level < 0) return
+    val notifs by PhoneListener.notifications.collectAsState()
+    // Grouped per app, most recent app first (4 from Telegram + 1 from Gmail → Telegram, Gmail).
+    val groups = remember(notifs) { notifs.groupBy { it.pkg }.map { (pkg, l) -> NotifGroup(pkg, l.first().app, l.first().icon, l.size) } }
     // A bit taller than the system bar so the widgets start below the camera punch-hole.
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp, end = 8.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-        MIcon(if (charging) Sym.BATTERY_BOLT else Sym.BATTERY, 22.dp, if (level <= 15 && !charging) p.error else p.onSurfaceVariant, filled = true)
-        Spacer(Modifier.width(4.dp))
-        Text("$level%", style = textStyle(15, p.onSurfaceVariant, 600))
+    Row(
+        Modifier.fillMaxWidth().height(30.dp).padding(start = 10.dp, end = 8.dp).pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Optional pills behind the notifications and the battery (theme surface, or black for white-on-black).
+        val pillMod = if (!pill) Modifier else Modifier.clip(CircleShape)
+            .background(if (mono) Color.Black.copy(alpha = 0.55f) else p.surfaceContainer).padding(horizontal = 10.dp, vertical = 3.dp)
+        val hasNotifs = mode != "off" && groups.isNotEmpty()
+        Box(Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentAlignment = Alignment.CenterStart) {
+          Box(if (hasNotifs) pillMod else Modifier) {
+            val colors = if (mono) StatusColors(NOTIF_FG, NOTIF_FG, NOTIF_FG.copy(alpha = 0.55f)) else StatusColors(p.primary, p.onSurface, p.onSurfaceVariant)
+            when (mode) {
+                "dots" -> NotifDots(groups, colors)
+                "carousel" -> NotifCarousel(groups, colors)
+            }
+          }
+        }
+        if (level >= 0) Row(pillMod, verticalAlignment = Alignment.CenterVertically) {
+            val low = level <= 15 && !charging
+            MIcon(if (charging) Sym.BATTERY_BOLT else Sym.BATTERY, 22.dp, if (low) p.error else if (mono) NOTIF_FG else p.primary, filled = true)
+            Spacer(Modifier.width(4.dp))
+            Text("$level%", style = textStyle(15, if (mono) NOTIF_FG else p.onSurfaceVariant, 600))
+        }
     }
+}
+
+private val NOTIF_FG = Color.White.copy(alpha = 0.9f)
+
+/** Icon/dot, app name, counter. */
+private data class StatusColors(val accent: Color, val text: Color, val dim: Color)
+
+/** One dot per app, at most 3: from the 4th app on, a "+". */
+@Composable
+private fun NotifDots(groups: List<NotifGroup>, c: StatusColors) {
+    Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+        groups.take(3).forEach { Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent)) }
+        if (groups.size > 3) Text("+", style = textStyle(15, c.accent, 700))
+    }
+}
+
+/** One app at a time, sliding up every few seconds (only while the launcher is on screen). */
+@Composable
+private fun NotifCarousel(groups: List<NotifGroup>, c: StatusColors) {
+    if (groups.isEmpty()) return
+    var i by remember { mutableIntStateOf(0) }
+    val resumed by AppState.resumed.collectAsState()
+    LaunchedEffect(groups.size, resumed) {
+        while (resumed && groups.size > 1) { delay(4_000); i++ }
+    }
+    val g = groups[i % groups.size]
+    androidx.compose.animation.AnimatedContent(
+        g, contentKey = { it.pkg }, label = "notif-carousel",
+        transitionSpec = {
+            (androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(350)) { it } + fadeIn(androidx.compose.animation.core.tween(350))) togetherWith
+                (androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(350)) { -it } + fadeOut(androidx.compose.animation.core.tween(250)))
+        },
+    ) { gr ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            NotifIcon(gr, c.accent)
+            Text(gr.app, style = textStyle(14, c.text, 600), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (gr.count > 1) Text("${gr.count}", style = textStyle(13, c.dim, 600))
+        }
+    }
+}
+
+/** The app's status-bar icon (a monochrome mask) tinted white; a dot until it's loaded or if missing. */
+@Composable
+private fun NotifIcon(g: NotifGroup, tint: Color) {
+    val ctx = LocalContext.current
+    val px = with(LocalDensity.current) { 16.dp.roundToPx() }
+    val bmp by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, g.pkg) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                g.icon?.loadDrawable(ctx)?.let { d ->
+                    val b = android.graphics.Bitmap.createBitmap(px, px, android.graphics.Bitmap.Config.ARGB_8888)
+                    d.setBounds(0, 0, px, px); d.draw(android.graphics.Canvas(b)); b.asImageBitmap()
+                }
+            }.getOrNull()
+        }
+    }
+    val b = bmp
+    if (b != null) Image(b, null, Modifier.size(16.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(tint))
+    else Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { Box(Modifier.size(7.dp).clip(CircleShape).background(tint)) }
 }
 
 /**

@@ -44,8 +44,25 @@ data class LauncherConfig(
     val navBar: String = "visible",
     /** Status bar on the home screen: "hidden" (swipe down to see it) or "visible". */
     val statusBar: String = "hidden",
-    /** Root background: "black" (AMOLED off) or "surface" (palette surface, softer). */
+    /** Root background: "black" (AMOLED off), "surface" (palette surface, softer) or "image" (custom photo over black). */
     val background: String = "black",
+    /** With a background image, opacity (0–100 %) of the widget cards (DMS "background") and of the pills inside them ("midground"). */
+    val cardOpacity: Int = 70,
+    /** Clock at the top (no widget tabs): "start", "center" or "end". */
+    val topClockAlign: String = "start",
+    /** App list with nothing beside it (clock on top, no Billable): "half" (like with Billable) or "full" width. Icons-only is always half. */
+    val appListWidth: String = "half",
+    val pillOpacity: Int = 85,
+    /** Notifications in the custom status bar: "off", "dots" (one per app) or "carousel" (icon + app name, rolling). */
+    val statusNotifs: String = "off",
+    /** Custom status bar colours: "theme" (palette) or "mono" (white on black). */
+    val statusStyle: String = "theme",
+    /** Custom status bar items on a pill (readable over bright background images). */
+    val statusPill: Boolean = false,
+    /** Seed colour for palette = "seed" (Material You scheme generated on the phone). */
+    val paletteSeed: Int = 0xFF3F6FD8.toInt(),
+    /** Last first-run setup answered ([SETUP_VERSION]): below it the setup questions are shown again. */
+    val setupVersion: Int = 0,
     /** phonedash pull server (set by `phonedash pair-launcher`). */
     val pcHost: String = "",
     val pcPort: Int = 8766,
@@ -55,6 +72,8 @@ data class LauncherConfig(
     companion object {
         val ALL_TABS = listOf("notifications", "agenda", "home", "weather", "photos")
         val ALL_CLOCK_PAGES = listOf("clock", "billable")
+        /** Bump when an update adds a question to the first-run setup ([SetupPrompt]). */
+        const val SETUP_VERSION = 2
     }
 }
 
@@ -72,7 +91,27 @@ object Settings {
     fun update(f: (LauncherConfig) -> LauncherConfig) {
         val c = f(_state.value)
         _state.value = c
-        sp.edit().putString("config", encode(c).toString()).apply()
+        if (beforeDemo == null) sp.edit().putString("config", encode(c).toString()).apply()
+    }
+
+    // ---- Screenshot demo (adb only, see ReadmeDemo): look-only overrides, in memory, never saved ----
+    private var beforeDemo: LauncherConfig? = null
+    private val DEMO_KEYS = setOf(
+        "tabs", "palette", "paletteSeed", "background", "cardOpacity", "pillOpacity", "statusBar", "statusNotifs",
+        "statusStyle", "statusPill", "showLabels", "clockPages", "iconSize", "themedIcons", "leftHanded", "topClockAlign", "appListWidth", "navBar",
+    )
+
+    fun demo(overrides: JSONObject) {
+        val base = beforeDemo ?: _state.value
+        beforeDemo = base
+        val j = encode(base)
+        overrides.keys().forEach { k -> if (k in DEMO_KEYS) j.put(k, overrides.get(k)) }
+        _state.value = decode(j)
+    }
+
+    fun endDemo() {
+        beforeDemo?.let { _state.value = it }
+        beforeDemo = null
     }
 
     fun togglePin(key: String) = update { c -> c.copy(pinned = if (key in c.pinned) c.pinned - key else c.pinned + key) }
@@ -95,7 +134,7 @@ object Settings {
         .put("city", c.city).put("billableUrl", c.billableUrl).put("billableToken", c.billableToken)
         .put("photoAlbum", c.photoAlbum).put("slideshowSeconds", c.slideshowSeconds)
         .put("photoSource", c.photoSource).put("iconSize", c.iconSize).put("showLabels", c.showLabels).put("themedIcons", c.themedIcons)
-        .put("configVersion", 2).put("navBar", c.navBar).put("statusBar", c.statusBar).put("background", c.background).put("pcHost", c.pcHost).put("pcPort", c.pcPort).put("pcToken", c.pcToken)
+        .put("configVersion", 2).put("navBar", c.navBar).put("statusBar", c.statusBar).put("background", c.background).put("cardOpacity", c.cardOpacity).put("topClockAlign", c.topClockAlign).put("appListWidth", c.appListWidth).put("pillOpacity", c.pillOpacity).put("statusNotifs", c.statusNotifs).put("statusStyle", c.statusStyle).put("statusPill", c.statusPill).put("paletteSeed", c.paletteSeed).put("setupVersion", c.setupVersion).put("pcHost", c.pcHost).put("pcPort", c.pcPort).put("pcToken", c.pcToken)
 
     private fun decode(j: JSONObject): LauncherConfig {
         val d = LauncherConfig()
@@ -127,11 +166,33 @@ object Settings {
             navBar = if (j.optInt("configVersion", 1) >= 2 && j.optString("navBar") == "hidden") "hidden" else "visible",
             statusBar = if (j.optString("statusBar") == "visible") "visible" else "hidden",
             background = j.optString("background", d.background),
+            cardOpacity = j.optInt("cardOpacity", d.cardOpacity).coerceIn(0, 100),
+            topClockAlign = j.optString("topClockAlign", d.topClockAlign),
+            appListWidth = j.optString("appListWidth", d.appListWidth),
+            pillOpacity = j.optInt("pillOpacity", d.pillOpacity).coerceIn(0, 100),
+            statusNotifs = j.optString("statusNotifs", d.statusNotifs),
+            statusStyle = j.optString("statusStyle", d.statusStyle),
+            statusPill = j.optBoolean("statusPill", d.statusPill),
+            paletteSeed = j.optInt("paletteSeed", d.paletteSeed),
+            setupVersion = j.optInt("setupVersion", d.setupVersion),
             pcHost = j.optString("pcHost", d.pcHost),
             pcPort = j.optInt("pcPort", d.pcPort),
             pcToken = j.optString("pcToken", d.pcToken),
         )
     }
+}
+
+/** Paired with a PC running phonedash (`phonedash pair-launcher`): only then PC/DMS options make sense. */
+val LauncherConfig.pcPaired get() = pcHost.isNotBlank() && pcToken.isNotBlank()
+val LauncherConfig.photosFromPc get() = photoSource == "pc" && pcPaired
+
+/** Billable Hours is a Pebble watchapp: its options show only with a Pebble app installed (or already set up). */
+object Pebble {
+    private val PACKAGES = listOf("coredevices.coreapp", "com.getpebble.android.basalt", "com.getpebble.android")
+    fun installed(ctx: Context) = PACKAGES.any { pkg ->
+        runCatching { ctx.packageManager.getPackageInfo(pkg, android.content.pm.PackageManager.PackageInfoFlags.of(0)) }.isSuccess
+    }
+    fun billableAvailable(ctx: Context, c: LauncherConfig) = c.billableUrl.isNotBlank() || installed(ctx)
 }
 
 /** Compatibility with the files shared with desk_sidecar (`Remote.config.value.language`, …). */
