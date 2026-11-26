@@ -69,6 +69,8 @@ data class LauncherConfig(
     val labelSize: String = "normal",
     /** Search apps: open the app straight away when only one is left. */
     val autoOpenSingle: Boolean = false,
+    /** Pause before that auto-open, 0–1000 ms (so it doesn't fire mid-word). */
+    val autoOpenDelayMs: Int = 350,
     /** Custom app names, by app key. */
     val renamed: Map<String, String> = emptyMap(),
     /** Long press on an app: "info" (app info) or "menu" (rename, uninstall, info…). */
@@ -159,7 +161,7 @@ object Settings {
         .put("city", c.city).put("billableUrl", c.billableUrl).put("billableToken", c.billableToken)
         .put("photoAlbum", c.photoAlbum).put("slideshowSeconds", c.slideshowSeconds)
         .put("photoSource", c.photoSource).put("iconSize", c.iconSize).put("showLabels", c.showLabels).put("themedIcons", c.themedIcons)
-        .put("showIcons", c.showIcons).put("labelSize", c.labelSize).put("autoOpenSingle", c.autoOpenSingle)
+        .put("showIcons", c.showIcons).put("labelSize", c.labelSize).put("autoOpenSingle", c.autoOpenSingle).put("autoOpenDelayMs", c.autoOpenDelayMs)
         .put("renamed", JSONObject(c.renamed as Map<*, *>)).put("appLongPress", c.appLongPress)
         .put("searchBar", c.searchBar).put("searchApp", c.searchApp).put("cameraButton", c.cameraButton)
         .put("agendaView", c.agendaView).put("homeProvider", c.homeProvider).put("haUrl", c.haUrl).put("haToken", c.haToken)
@@ -208,6 +210,7 @@ object Settings {
             showIcons = j.optBoolean("showIcons", d.showIcons) || !j.optBoolean("showLabels", d.showLabels),
             labelSize = j.optString("labelSize", d.labelSize),
             autoOpenSingle = j.optBoolean("autoOpenSingle", d.autoOpenSingle),
+            autoOpenDelayMs = j.optInt("autoOpenDelayMs", d.autoOpenDelayMs).coerceIn(0, 1000),
             renamed = j.optJSONObject("renamed")?.let { o -> o.keys().asSequence().associateWith { o.getString(it) } } ?: d.renamed,
             appLongPress = j.optString("appLongPress", d.appLongPress),
             searchBar = j.optBoolean("searchBar", d.searchBar),

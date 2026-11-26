@@ -2,7 +2,7 @@
 
 ## Installazione
 
-1. Serve **Android 13 o superiore**. Installa `sidecar_launcher-0.3.0.apk` (consenti "installa app sconosciute").
+1. Serve **Android 13 o superiore**. Installa `sidecar_launcher-0.3.1.apk` (consenti "installa app sconosciute").
 2. Aprilo e concedi calendario, posizione e foto. Al primo avvio (e dopo gli aggiornamenti che aggiungono opzioni) ti chiede come vuoi la barra di stato e la barra gesture.
 3. **Accesso alle notifiche** (serve per notifiche e player musicale): *Impostazioni → App → Sidecar Launcher → menu ⋮ → Consenti impostazioni con restrizioni*, poi *Accesso alle notifiche → Sidecar Launcher*.
 4. Rendilo la home: *Impostazioni → App predefinite → App Home → Sidecar Launcher*.
@@ -56,7 +56,7 @@ Compare da solo quando c'è musica: precedente / play-pausa / successivo.
 | **Aspetto** | lista app a destra/sinistra (mancini) · colori: di sistema, dal PC (se collegato) o palette (8 predefinite o colore personalizzato) · sfondo nero, scuro tenue o immagine (con trasparenza regolabile di riquadri e pillole, come in DMS) · barra di stato personalizzata (batteria + notifiche a pallini o a carosello, colori del tema o bianco su nero, pillola opzionale) o di sistema · barra gesture visibile o nascosta · larghezza della lista app · icone e nomi / solo icone (una colonna centrata) / solo nomi · dimensione icone e dei nomi · icone a tema · lingua: sistema / IT / EN |
 | **Animazioni** | player: Off / 30 s / Sempre · zoom lento delle foto |
 | **Widget e orologio** | ordine e visibilità delle tab (senza tab l'orologio va in alto, a sinistra / al centro / a destra) · pagine sotto l'orologio (anche nessuna) · barra di ricerca (Google o un browser) e pulsante fotocamera, mostra/nascondi |
-| **App** | pressione lunga: info app o menu · apertura automatica se resta una sola app · ordine dei preferiti · app rinominate e nascoste da ripristinare |
+| **App** | pressione lunga: info app o menu · apertura automatica se resta una sola app, con attesa regolabile (0–1 s) · ordine dei preferiti · app rinominate e nascoste da ripristinare |
 | **Calendari** | vista agenda o calendario del mese · quali calendari mostrare |
 | **Casa, meteo, Billable** | widget Casa con Google Home (collega/scollega) o Home Assistant (indirizzo + token di accesso a lunga durata, con pulsante «Prova») · città del meteo (vuoto = posizione) · Billable Hours (solo con l'app Pebble installata): URL e parola segreta, con lo stato dell'ultimo aggiornamento |
 | **Foto** | origine (PC o galleria) · album · durata di ogni foto |

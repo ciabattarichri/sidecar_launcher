@@ -73,7 +73,7 @@ black, optional pill) or the system one; gesture bar; app list width, icons and 
 centred column) / names only, icon and name size, themed icons; language system/IT/EN), animations,
 widgets & clock pages (no widget tabs → the clock moves to the top: left, centre or right; the clock
 can also be removed altogether; search pill opening Google or a browser, and camera button, each
-optional), apps (pinned, hidden, renamed; long press = app info or menu; open the only search match),
+optional), apps (pinned, hidden, renamed; long press = app info or menu; open the only search match, after an adjustable 0–1 s pause),
 calendars (agenda list or month view), Google Home or Home Assistant (URL + long-lived token) /
 weather / Billable Hours (only with a Pebble app installed), photos (gallery, or the PC folder when paired; album, duration, lyrics), system shortcuts
 (notification access, default launcher, black home wallpaper). Options that depend on another choice

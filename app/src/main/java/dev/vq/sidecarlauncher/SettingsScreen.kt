@@ -136,7 +136,11 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit, initialPage: 
                         sizes.indexOf(cfg.labelSize).coerceAtLeast(0)) { i -> Settings.update { it.copy(labelSize = sizes[i]) } }
                 }
             }
-            item { Choice(tr("Icone a tema", "Themed icons"), listOf("Off", "On"), if (cfg.themedIcons) 1 else 0) { i -> Settings.update { it.copy(themedIcons = i == 1) } } }
+            item {
+                Dimmed(cfg.showIcons, tr("Solo con le icone visibili", "Only with icons shown")) {
+                    Choice(tr("Icone a tema", "Themed icons"), listOf("Off", "On"), if (cfg.themedIcons) 1 else 0) { i -> Settings.update { it.copy(themedIcons = i == 1) } }
+                }
+            }
             item {
             val langs = listOf("system", "it", "en")
             Choice(tr("Lingua", "Language"), listOf(tr("Sistema", "System"), "Italiano", "English"), langs.indexOf(cfg.language).coerceAtLeast(0)) { i -> Settings.update { it.copy(language = langs[i]) } }
@@ -208,6 +212,24 @@ fun SettingsScreen(onClose: () -> Unit, requestPhotos: () -> Unit, initialPage: 
             item {
                 Choice(tr("Ricerca: se resta una sola app, aprila subito", "Search: open the app when only one is left"), listOf("Off", "On"),
                     if (cfg.autoOpenSingle) 1 else 0) { i -> Settings.update { it.copy(autoOpenSingle = i == 1) } }
+            }
+            item {
+                // Moves locally, saved on release (one write instead of one per frame).
+                var ms by remember(cfg.autoOpenDelayMs) { mutableFloatStateOf(cfg.autoOpenDelayMs.toFloat()) }
+                Dimmed(cfg.autoOpenSingle, tr("Solo con l'apertura automatica attiva", "Only with auto-open on")) {
+                    Column(Modifier.fillMaxWidth().then(cardModifier(true))) {
+                        Text(tr("Attesa prima di aprire: ", "Wait before opening: ") + (if (ms < 1f) tr("subito", "instant") else "%.2f s".format(ms / 1000f)),
+                            style = textStyle(15, p.onSurface, 500))
+                        androidx.compose.material3.Slider(
+                            value = ms, onValueChange = { ms = it }, valueRange = 0f..1000f, steps = 19,
+                            onValueChangeFinished = { Settings.update { it.copy(autoOpenDelayMs = ms.toInt()) } },
+                            colors = androidx.compose.material3.SliderDefaults.colors(
+                                thumbColor = p.primary, activeTrackColor = p.primary, inactiveTrackColor = p.surfaceContainerHighest,
+                                activeTickColor = p.onPrimary, inactiveTickColor = p.onSurfaceVariant,
+                            ),
+                        )
+                    }
+                }
             }
 
             section(tr("App rinominate", "Renamed apps"))

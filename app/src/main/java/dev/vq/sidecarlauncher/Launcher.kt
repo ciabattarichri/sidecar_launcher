@@ -415,10 +415,10 @@ private fun AppList(modifier: Modifier, onSearching: (Boolean) -> Unit) {
     LaunchedEffect(searching) { onSearching(searching) }
     // While searching: every app matching, hidden ones included (shown dimmed).
     val matches = if (searching) all.filter { q.isEmpty() || cfg.labelOf(it).contains(q, ignoreCase = true) || it.label.contains(q, ignoreCase = true) } else emptyList()
-    // Optional: one app left → open it (short pause so it doesn't fire mid-word).
+    // Optional: one app left → open it (after the chosen pause, so it doesn't fire mid-word).
     val single = matches.singleOrNull()?.takeIf { cfg.autoOpenSingle && q.isNotEmpty() }
     LaunchedEffect(single?.key, q) {
-        if (single != null) { delay(350); Apps.launch(single); query = null }
+        if (single != null) { delay(cfg.autoOpenDelayMs.toLong()); Apps.launch(single); query = null }
     }
     val pinned = if (searching) emptyList() else cfg.pinned.mapNotNull { byKey[it] }.filter { it.key !in cfg.hidden }
     val rest = if (searching) matches else all.filter { it.key !in cfg.hidden && it.key !in cfg.pinned }
